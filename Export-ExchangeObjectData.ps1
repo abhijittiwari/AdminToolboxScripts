@@ -77,9 +77,9 @@ function Add-ExportError {
 }
 
 function Initialize-OutputFolder {
-    param([Parameter(Mandatory = $true)] [string]$Path)
+    param([Parameter(Mandatory = $true)] [string]$OutputFolder)
 
-    $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFolder)
     if (-not (Test-Path -Path $resolvedPath)) {
         New-Item -Path $resolvedPath -ItemType Directory -Force | Out-Null
     }
@@ -111,7 +111,7 @@ function Get-InputIdentityList {
     return @()
 }
 
-$resolvedOutputFolder = Initialize-OutputFolder -Path $OutputFolder
+$resolvedOutputFolder = Initialize-OutputFolder -OutputFolder $OutputFolder
 $isMultiObjectRun = $PSCmdlet.ParameterSetName -in @('All', 'Csv')
 
 Write-Host "Output folder: $resolvedOutputFolder" -ForegroundColor Cyan
