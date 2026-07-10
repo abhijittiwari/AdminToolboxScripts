@@ -323,6 +323,85 @@ function Connect-GraphIfNeeded {
     }
 }
 
+function New-GraphRequestExecutor {
+    return {
+        param($Method, $Uri, $Body)
+        if ($null -ne $Body) {
+            Invoke-MgGraphRequest -Method $Method -Uri $Uri -Body ($Body | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+        }
+        else {
+            Invoke-MgGraphRequest -Method $Method -Uri $Uri
+        }
+    }
+}
+
+function Invoke-GraphBatch {
+    param(
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Requests,
+        [Parameter(Mandatory = $false)] [scriptblock]$GraphRequest,
+        [Parameter(Mandatory = $false)] [int]$MaxAttempts = 5,
+        [Parameter(Mandatory = $false)] [scriptblock]$OnItemError,
+        [Parameter(Mandatory = $false)] [string]$Activity = 'Calling Microsoft Graph'
+    )
+
+    if (-not $GraphRequest) { $GraphRequest = New-GraphRequestExecutor }
+
+    $results = @{}
+    $pending = [System.Collections.Generic.List[object]]::new()
+    foreach ($request in @($Requests)) { $pending.Add($request) | Out-Null }
+    $totalCount = [Math]::Max($pending.Count, 1)
+    $attempt = 1
+
+    while ($pending.Count -gt 0 -and $attempt -le $MaxAttempts) {
+        $retryQueue = [System.Collections.Generic.List[object]]::new()
+        $delaySeconds = [Math]::Pow(2, $attempt)
+
+        for ($offset = 0; $offset -lt $pending.Count; $offset += 20) {
+            $chunk = @($pending[$offset..([Math]::Min($offset + 19, $pending.Count - 1))])
+            Write-Progress -Activity $Activity -Status "attempt $attempt, $([Math]::Min($offset + 20, $pending.Count)) of $($pending.Count)" -PercentComplete ((($totalCount - $pending.Count + $offset) / $totalCount) * 100)
+            $body = @{ requests = @($chunk | ForEach-Object { @{ id = [string]$_.Id; method = 'GET'; url = [string]$_.Url } }) }
+
+            try {
+                $response = & $GraphRequest 'POST' 'https://graph.microsoft.com/v1.0/$batch' $body
+            }
+            catch {
+                foreach ($item in $chunk) { $retryQueue.Add($item) | Out-Null }
+                continue
+            }
+
+            foreach ($item in @($response.responses)) {
+                $itemId = [string]$item.id
+                $status = [int]$item.status
+                if ($status -ge 200 -and $status -lt 300) {
+                    $results[$itemId] = $item.body
+                }
+                elseif ($status -in @(429, 502, 503, 504)) {
+                    $retryQueue.Add(($chunk | Where-Object { [string]$_.Id -eq $itemId } | Select-Object -First 1)) | Out-Null
+                    if ($item.headers -and $item.headers.'Retry-After') {
+                        $headerDelay = [double]$item.headers.'Retry-After'
+                        if ($headerDelay -gt $delaySeconds) { $delaySeconds = $headerDelay }
+                    }
+                }
+                else {
+                    $message = if ($item.body -and $item.body.error -and $item.body.error.message) { [string]$item.body.error.message } else { "HTTP $status" }
+                    if ($OnItemError) { & $OnItemError $itemId $message }
+                }
+            }
+        }
+
+        $pending = $retryQueue
+        if ($pending.Count -gt 0 -and $attempt -lt $MaxAttempts) { Start-Sleep -Seconds $delaySeconds }
+        $attempt++
+    }
+
+    Write-Progress -Activity $Activity -Completed
+    foreach ($leftover in $pending) {
+        if ($OnItemError) { & $OnItemError ([string]$leftover.Id) "Gave up after $MaxAttempts attempts (throttled)" }
+    }
+
+    return $results
+}
+
 function Get-EntraGroupMembershipRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 

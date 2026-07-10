@@ -72,6 +72,56 @@ function Test-ProxyLookupLayerRemoved {
 }
 Test-ProxyLookupLayerRemoved
 
+function Test-InvokeGraphBatch {
+    # 45 requests -> 3 batch calls (20 + 20 + 5), all succeed.
+    $script:BatchCalls = [System.Collections.Generic.List[object]]::new()
+    $mockOk = {
+        param($Method, $Uri, $Body)
+        $script:BatchCalls.Add($Body.requests.Count) | Out-Null
+        return @{ responses = @($Body.requests | ForEach-Object { @{ id = $_.id; status = 200; body = @{ value = @($_.url) } } }) }
+    }
+    $requests = @(1..45 | ForEach-Object { @{ Id = "r$_"; Url = "/directoryObjects/$_/memberOf" } })
+    $results = Invoke-GraphBatch -Requests $requests -GraphRequest $mockOk
+    Assert-True -Condition ($script:BatchCalls.Count -eq 3 -and $script:BatchCalls[0] -eq 20 -and $script:BatchCalls[2] -eq 5) -Name 'Invoke-GraphBatch chunks into 20s'
+    Assert-True -Condition ($results.Count -eq 45 -and $results['r7'].value[0] -eq '/directoryObjects/7/memberOf') -Name 'Invoke-GraphBatch maps responses to request ids'
+
+    # One item throttled once (429 with Retry-After 0), succeeds on retry.
+    $script:Attempt = 0
+    $mockThrottle = {
+        param($Method, $Uri, $Body)
+        $script:Attempt++
+        $responses = @($Body.requests | ForEach-Object {
+            if ($_.id -eq 'r1' -and $script:Attempt -eq 1) {
+                @{ id = $_.id; status = 429; headers = @{ 'Retry-After' = '0' }; body = @{ error = @{ message = 'throttled' } } }
+            }
+            else { @{ id = $_.id; status = 200; body = @{ value = @() } } }
+        })
+        return @{ responses = $responses }
+    }
+    $results = Invoke-GraphBatch -Requests @(@{ Id = 'r1'; Url = '/x' }, @{ Id = 'r2'; Url = '/y' }) -GraphRequest $mockThrottle
+    Assert-True -Condition ($results.Count -eq 2 -and $script:Attempt -eq 2) -Name 'Invoke-GraphBatch retries throttled items'
+
+    # Permanent 404 -> OnItemError once, not in results.
+    $script:ItemErrors = [System.Collections.Generic.List[string]]::new()
+    $mock404 = {
+        param($Method, $Uri, $Body)
+        return @{ responses = @($Body.requests | ForEach-Object { @{ id = $_.id; status = 404; body = @{ error = @{ message = 'not found' } } } }) }
+    }
+    $onError = { param($id, $message) $script:ItemErrors.Add("$id|$message") | Out-Null }
+    $results = Invoke-GraphBatch -Requests @(@{ Id = 'r9'; Url = '/gone' }) -GraphRequest $mock404 -OnItemError $onError
+    Assert-True -Condition ($results.Count -eq 0 -and $script:ItemErrors.Count -eq 1 -and $script:ItemErrors[0] -eq 'r9|not found') -Name 'Invoke-GraphBatch reports permanent item failures once'
+
+    # Always-throttled item exhausts MaxAttempts then errors.
+    $script:ItemErrors = [System.Collections.Generic.List[string]]::new()
+    $mockAlways429 = {
+        param($Method, $Uri, $Body)
+        return @{ responses = @($Body.requests | ForEach-Object { @{ id = $_.id; status = 429; headers = @{ 'Retry-After' = '0' }; body = @{} } }) }
+    }
+    $results = Invoke-GraphBatch -Requests @(@{ Id = 'r1'; Url = '/x' }) -GraphRequest $mockAlways429 -MaxAttempts 2 -OnItemError $onError
+    Assert-True -Condition ($results.Count -eq 0 -and $script:ItemErrors.Count -eq 1) -Name 'Invoke-GraphBatch gives up after MaxAttempts'
+}
+Test-InvokeGraphBatch
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
