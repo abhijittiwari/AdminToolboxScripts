@@ -273,6 +273,54 @@ function Get-ExchangeGroupMembershipRows {
     }
 }
 
+function Connect-GraphIfNeeded {
+    if ($SkipGraph) {
+        Write-Host 'Skipping Microsoft Graph connection because -SkipGraph was specified.' -ForegroundColor Yellow
+        return $false
+    }
+
+    try {
+        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+        Import-Module Microsoft.Graph.DirectoryObjects -ErrorAction Stop
+        Connect-MgGraph -Scopes @('User.Read.All', 'Group.Read.All', 'Directory.Read.All') -NoWelcome
+        return $true
+    }
+    catch {
+        Add-ExportError -Identity '' -Stage 'GraphConnect' -Operation 'Connect-MgGraph' -Message $_.Exception.Message
+        return $false
+    }
+}
+
+function Get-EntraGroupMembershipRows {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    $externalId = [string]$Recipient.ExternalDirectoryObjectId
+    if ([string]::IsNullOrWhiteSpace($externalId)) {
+        return @()
+    }
+
+    try {
+        return @(
+            Get-MgDirectoryObjectMemberOf -DirectoryObjectId $externalId -All -ErrorAction Stop |
+                Where-Object { $_.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.group' } |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        Identity             = [string]$Recipient.Identity
+                        PrimarySmtpAddress   = [string]$Recipient.PrimarySmtpAddress
+                        GroupId              = [string]$_.Id
+                        GroupDisplayName     = [string]$_.AdditionalProperties.displayName
+                        GroupMail            = [string]$_.AdditionalProperties.mail
+                        GroupSecurityEnabled = [string]$_.AdditionalProperties.securityEnabled
+                    }
+                }
+        )
+    }
+    catch {
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'EntraGroupMemberships' -Operation 'Get-MgDirectoryObjectMemberOf' -Message $_.Exception.Message
+        return @()
+    }
+}
+
 function Get-TargetRecipients {
     if ($PSCmdlet.ParameterSetName -eq 'All') {
         Write-Host "Loading Exchange recipients..." -ForegroundColor Cyan
@@ -317,6 +365,9 @@ $objects = @($targetRecipients | ForEach-Object { ConvertTo-ExportObject -Recipi
 
 Write-Host "Objects selected: $($objects.Count)" -ForegroundColor Green
 
+$graphConnected = Connect-GraphIfNeeded
+$entraGroupMembershipRows = New-Object System.Collections.Generic.List[object]
+
 $proxyRows = New-Object System.Collections.Generic.List[object]
 $fullAccessRows = New-Object System.Collections.Generic.List[object]
 $sendAsRows = New-Object System.Collections.Generic.List[object]
@@ -331,5 +382,8 @@ foreach ($recipient in $targetRecipients) {
     foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
     foreach ($row in @(Get-SendAsRows -Recipient $recipient)) { $sendAsRows.Add($row) | Out-Null }
     foreach ($row in @(Get-ExchangeGroupMembershipRows -Recipient $recipient)) { $exchangeGroupMembershipRows.Add($row) | Out-Null }
+    if ($graphConnected) {
+        foreach ($row in @(Get-EntraGroupMembershipRows -Recipient $recipient)) { $entraGroupMembershipRows.Add($row) | Out-Null }
+    }
 }
 Write-Progress -Activity 'Collecting Exchange object data' -Completed
