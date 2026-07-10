@@ -49,6 +49,8 @@ For `-All`, recipient discovery should honor `-RecipientType`. For `-InputCsv` a
 
 The script should normalize object records into a consistent schema even when a property is missing for a recipient type.
 
+For mailbox objects, the export should explicitly identify mailbox subtype. The output should include a `MailboxType` field derived from Exchange recipient details, with values such as `UserMailbox`, `SharedMailbox`, `RoomMailbox`, `EquipmentMailbox`, or another Exchange-returned mailbox type. This makes it clear whether a mailbox is a normal user mailbox or a shared mailbox without requiring the reader to interpret raw recipient metadata.
+
 ## Data Sources
 
 Use an Exchange-first model with Graph enrichment.
@@ -96,6 +98,7 @@ Columns:
 - `DisplayName`
 - `RecipientType`
 - `RecipientTypeDetails`
+- `MailboxType`
 - `PrimarySmtpAddress`
 - `Alias`
 - `ExternalDirectoryObjectId`
@@ -111,7 +114,7 @@ Columns:
 
 `Objects.csv`
 
-One row per object with core identity and recipient metadata.
+One row per object with core identity and recipient metadata, including `MailboxType` for mailbox objects.
 
 `ProxyAddresses.csv`
 
@@ -149,7 +152,7 @@ The dashboard is a static local HTML file. It embeds the consolidated and normal
 
 Dashboard features:
 
-- Search across display name, primary SMTP, recipient type, aliases, proxies, permissions, and group memberships.
+- Search across display name, primary SMTP, recipient type, mailbox type, aliases, proxies, permissions, and group memberships.
 - Checkbox selection per visible object.
 - Select all visible and clear selection controls.
 - Expandable detail views for proxies, FullAccess, SendAs, Exchange groups, and Entra groups.
