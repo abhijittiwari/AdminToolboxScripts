@@ -6,10 +6,83 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 
 | Script | Platform | Purpose |
 | --- | --- | --- |
+| `Export-ExchangeObjectData.ps1` | PowerShell | Exports Exchange Online recipient proxies, permissions, Exchange/Entra group memberships, CSV reports, and a searchable HTML dashboard. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
+
+## Export-ExchangeObjectData.ps1
+
+Exports Exchange Online recipient data for mailboxes by default, or for selected recipient object types. The script can process all matching recipients, multiple identities from a CSV, or a single identity. It exports proxy addresses, FullAccess permissions, SendAs permissions, Exchange group memberships, Entra ID group memberships, normalized CSV files, a consolidated CSV, and a searchable HTML dashboard for multi-object runs.
+
+### Requirements
+
+- PowerShell.
+- ExchangeOnlineManagement module: `Install-Module ExchangeOnlineManagement`.
+- Microsoft.Graph modules for Entra group membership enrichment.
+- Exchange Online permission to read recipients and permissions.
+- Microsoft Graph delegated scopes for Entra group memberships:
+  - `User.Read.All`
+  - `Group.Read.All`
+  - `Directory.Read.All`
+
+Graph permissions may require admin consent depending on tenant policy.
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `-All` | Switch | Off | Exports all recipients matching `-RecipientType`. |
+| `-InputCsv` | String | None | CSV file containing object identities to export. |
+| `-Identity` | String | None | Single Exchange-resolvable identity to export. |
+| `-IdentityColumn` | String | `Identity` | CSV column containing identities. |
+| `-RecipientType` | String | `Mailbox` | Object type filter: `Mailbox`, `Group`, `MailUser`, `MailContact`, or `All`. |
+| `-OutputFolder` | String | Timestamped folder | Folder where CSVs and dashboard are written. |
+| `-SkipGraph` | Switch | Off | Skips Microsoft Graph connection and Entra group membership export. |
+| `-NoDashboard` | Switch | Off | Suppresses `Dashboard.html` generation for multi-object runs. |
+
+### Usage
+
+```powershell
+./Export-ExchangeObjectData.ps1 -All
+```
+
+```powershell
+./Export-ExchangeObjectData.ps1 -All -RecipientType All
+```
+
+```powershell
+./Export-ExchangeObjectData.ps1 -InputCsv ./objects.csv -IdentityColumn Identity -RecipientType Group
+```
+
+```powershell
+./Export-ExchangeObjectData.ps1 -Identity user@contoso.com
+```
+
+### Output Files
+
+- `Objects-Consolidated.csv`
+- `Objects.csv`
+- `ProxyAddresses.csv`
+- `FullAccess.csv`
+- `SendAs.csv`
+- `ExchangeGroupMemberships.csv`
+- `EntraGroupMemberships.csv`
+- `Errors.csv`
+- `Dashboard.html` for `-All` and `-InputCsv` runs unless `-NoDashboard` is used
+
+### Dashboard
+
+The dashboard is a static local HTML file. It supports search, checkbox selection, expandable object details, and browser-side CSV export of selected objects and selected detail rows.
+
+### Notes
+
+- The default recipient type is `Mailbox`.
+- Mailbox exports include `MailboxType`, such as `UserMailbox`, `SharedMailbox`, `RoomMailbox`, or `EquipmentMailbox`.
+- The script is read-only.
+- If a lookup fails for an object or permission type, the script continues and records the failure in `Errors.csv`.
+- Export files and the dashboard may contain sensitive proxy addresses, mailbox permissions, group memberships, and object identifiers. Handle them as sensitive administrative data.
 
 ## Get-EntraAdminAccounts.ps1
 

@@ -659,3 +659,11 @@ if ($isMultiObjectRun -and -not $NoDashboard) {
         @($script:Errors) | Export-Csv -Path (Join-Path $resolvedOutputFolder 'Errors.csv') -NoTypeInformation -Encoding UTF8
     }
 }
+
+Write-Host "Objects exported: $($objects.Count)" -ForegroundColor Green
+Write-Host "Errors logged: $($script:Errors.Count)" -ForegroundColor Yellow
+
+try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+if ($graphConnected) {
+    try { Disconnect-MgGraph | Out-Null } catch { }
+}
