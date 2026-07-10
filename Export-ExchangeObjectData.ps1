@@ -126,10 +126,10 @@ function Test-RecipientMatchesType {
 
     switch ($SelectedRecipientType) {
         'Mailbox' {
-            return ($typeDetails -match 'Mailbox$' -or $type -eq 'UserMailbox')
+            return ($typeDetails -ne 'GroupMailbox' -and ($typeDetails -match 'Mailbox$' -or $type -eq 'UserMailbox'))
         }
         'Group' {
-            return ($typeDetails -match 'Group$' -or $typeDetails -match 'DistributionGroup' -or $typeDetails -eq 'MailUniversalSecurityGroup')
+            return ($typeDetails -eq 'GroupMailbox' -or $typeDetails -match 'Group$' -or $typeDetails -match 'DistributionGroup' -or $typeDetails -eq 'MailUniversalSecurityGroup')
         }
         'MailUser' {
             return ($typeDetails -eq 'MailUser' -or $type -eq 'MailUser')
@@ -227,13 +227,20 @@ function Get-FullAccessRows {
     }
 }
 
+function Test-IsSelfTrustee {
+    param([Parameter(Mandatory = $false)] [string]$Trustee)
+
+    $normalized = $Trustee.Trim()
+    return $normalized -in @('NT AUTHORITY\SELF', 'SELF', 'S-1-5-10')
+}
+
 function Get-SendAsRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
     try {
         return @(
             Get-RecipientPermission -Identity $Recipient.Identity -ErrorAction Stop |
-                Where-Object { -not $_.IsInherited -and ($_.AccessRights -contains 'SendAs') } |
+                Where-Object { -not $_.IsInherited -and -not (Test-IsSelfTrustee -Trustee ([string]$_.Trustee)) -and ($_.AccessRights -contains 'SendAs') } |
                 ForEach-Object {
                     [pscustomobject]@{
                         Identity           = [string]$Recipient.Identity
@@ -359,13 +366,13 @@ function Join-Values {
 
 function New-ConsolidatedRows {
     param(
-        [Parameter(Mandatory = $true)] [object[]]$Objects,
-        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
-        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
-        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
-        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
-        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows,
-        [Parameter(Mandatory = $true)] [object[]]$ErrorRows
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Objects,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$EntraGroupRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ErrorRows
     )
 
     foreach ($object in $Objects) {
@@ -390,44 +397,65 @@ function New-ConsolidatedRows {
     }
 }
 
+function Export-CsvWithHeaders {
+    param(
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Rows,
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] [string[]]$Headers
+    )
+
+    if ($Rows.Count -gt 0) {
+        $Rows | Select-Object -Property $Headers | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+        return
+    }
+
+    $headerLine = ($Headers | ForEach-Object { '"' + ($_ -replace '"', '""') + '"' }) -join ','
+    Set-Content -Path $Path -Value $headerLine -Encoding UTF8
+}
+
 function Export-ReportCsvs {
     param(
         [Parameter(Mandatory = $true)] [string]$Folder,
-        [Parameter(Mandatory = $true)] [object[]]$Objects,
-        [Parameter(Mandatory = $true)] [object[]]$ConsolidatedRows,
-        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
-        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
-        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
-        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
-        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows,
-        [Parameter(Mandatory = $true)] [object[]]$ErrorRows
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Objects,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ConsolidatedRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$EntraGroupRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ErrorRows
     )
 
-    $ConsolidatedRows | Export-Csv -Path (Join-Path $Folder 'Objects-Consolidated.csv') -NoTypeInformation -Encoding UTF8
-    $Objects | Export-Csv -Path (Join-Path $Folder 'Objects.csv') -NoTypeInformation -Encoding UTF8
-    $ProxyRows | Export-Csv -Path (Join-Path $Folder 'ProxyAddresses.csv') -NoTypeInformation -Encoding UTF8
-    $FullAccessRows | Export-Csv -Path (Join-Path $Folder 'FullAccess.csv') -NoTypeInformation -Encoding UTF8
-    $SendAsRows | Export-Csv -Path (Join-Path $Folder 'SendAs.csv') -NoTypeInformation -Encoding UTF8
-    $ExchangeGroupRows | Export-Csv -Path (Join-Path $Folder 'ExchangeGroupMemberships.csv') -NoTypeInformation -Encoding UTF8
-    $EntraGroupRows | Export-Csv -Path (Join-Path $Folder 'EntraGroupMemberships.csv') -NoTypeInformation -Encoding UTF8
-    $ErrorRows | Export-Csv -Path (Join-Path $Folder 'Errors.csv') -NoTypeInformation -Encoding UTF8
+    Export-CsvWithHeaders -Rows $ConsolidatedRows -Path (Join-Path $Folder 'Objects-Consolidated.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'ProxyAddresses', 'FullAccessTrustees', 'SendAsTrustees', 'ExchangeGroupMemberships', 'EntraGroupMemberships', 'HasErrors')
+    Export-CsvWithHeaders -Rows $Objects -Path (Join-Path $Folder 'Objects.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'DistinguishedName')
+    Export-CsvWithHeaders -Rows $ProxyRows -Path (Join-Path $Folder 'ProxyAddresses.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'AddressType', 'ProxyAddress', 'RawProxyAddress', 'IsPrimarySmtp')
+    Export-CsvWithHeaders -Rows $FullAccessRows -Path (Join-Path $Folder 'FullAccess.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'Deny', 'IsInherited')
+    Export-CsvWithHeaders -Rows $SendAsRows -Path (Join-Path $Folder 'SendAs.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'IsInherited')
+    Export-CsvWithHeaders -Rows $ExchangeGroupRows -Path (Join-Path $Folder 'ExchangeGroupMemberships.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'GroupIdentity')
+    Export-CsvWithHeaders -Rows $EntraGroupRows -Path (Join-Path $Folder 'EntraGroupMemberships.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'GroupId', 'GroupDisplayName', 'GroupMail', 'GroupSecurityEnabled')
+    Export-CsvWithHeaders -Rows $ErrorRows -Path (Join-Path $Folder 'Errors.csv') -Headers @('Identity', 'Stage', 'Operation', 'Message')
 }
 
 function ConvertTo-JsonLiteral {
     param([Parameter(Mandatory = $false)] $Value)
 
-    return (ConvertTo-Json -InputObject @($Value) -Depth 10 -Compress)
+    return ((ConvertTo-Json -InputObject @($Value) -Depth 10 -Compress) `
+        -replace '&', '\u0026' `
+        -replace '<', '\u003c' `
+        -replace '>', '\u003e' `
+        -replace [char]0x2028, '\u2028' `
+        -replace [char]0x2029, '\u2029')
 }
 
 function Export-DashboardHtml {
     param(
         [Parameter(Mandatory = $true)] [string]$Folder,
-        [Parameter(Mandatory = $true)] [object[]]$ConsolidatedRows,
-        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
-        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
-        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
-        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
-        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ConsolidatedRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$EntraGroupRows
     )
 
     $objectsJson = ConvertTo-JsonLiteral -Value $ConsolidatedRows
