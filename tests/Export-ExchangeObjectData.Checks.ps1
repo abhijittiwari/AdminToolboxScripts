@@ -48,6 +48,30 @@ $script:Errors = [System.Collections.Generic.List[object]]::new()
 # Checks (appended by implementation tasks)
 # ---------------------------------------------------------------------------
 
+function Test-ConvertToProxyRows {
+    $recipient = [pscustomobject]@{
+        Identity           = 'Jane Doe'
+        PrimarySmtpAddress = 'jane@contoso.com'
+        EmailAddresses     = @('SMTP:jane@contoso.com', 'smtp:jane.doe@contoso.com', 'SPO:SPO_abc123')
+    }
+    $rows = @(ConvertTo-ProxyRows -Recipient $recipient)
+    Assert-True -Condition ($rows.Count -eq 3) -Name 'ConvertTo-ProxyRows returns one row per address'
+    Assert-True -Condition ($rows[0].AddressType -eq 'SMTP' -and $rows[0].ProxyAddress -eq 'jane@contoso.com' -and $rows[0].IsPrimarySmtp -eq $true) -Name 'ConvertTo-ProxyRows parses primary SMTP'
+    Assert-True -Condition ($rows[1].IsPrimarySmtp -eq $false -and $rows[1].AddressType -eq 'smtp') -Name 'ConvertTo-ProxyRows keeps secondary smtp non-primary'
+    Assert-True -Condition ($rows[2].AddressType -eq 'SPO' -and $rows[2].ProxyAddress -eq 'SPO_abc123') -Name 'ConvertTo-ProxyRows preserves non-SMTP prefixes'
+
+    $emptyRecipient = [pscustomobject]@{ Identity = 'X'; PrimarySmtpAddress = ''; EmailAddresses = $null }
+    Assert-True -Condition (@(ConvertTo-ProxyRows -Recipient $emptyRecipient).Count -eq 0) -Name 'ConvertTo-ProxyRows returns empty for null addresses'
+}
+Test-ConvertToProxyRows
+
+function Test-ProxyLookupLayerRemoved {
+    $scriptText = Get-Content -Path $script:ScriptPath -Raw
+    Assert-True -Condition ($scriptText -notmatch 'Get-ProxyAddressRows') -Name 'Old Get-ProxyAddressRows removed'
+    Assert-True -Condition ($scriptText -match 'Properties\s+[^|]*EmailAddresses') -Name 'Inventory requests EmailAddresses property'
+}
+Test-ProxyLookupLayerRemoved
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
