@@ -263,7 +263,7 @@ function Get-ExchangeGroupMembershipRows {
 
     try {
         return @(
-            Get-EXORecipient -Identity $Recipient.Identity -Properties MemberOfGroup -ErrorAction Stop |
+            Get-Recipient -Identity $Recipient.Identity -ErrorAction Stop |
                 Select-Object -ExpandProperty MemberOfGroup -ErrorAction SilentlyContinue |
                 ForEach-Object {
                     [pscustomobject]@{
@@ -275,7 +275,7 @@ function Get-ExchangeGroupMembershipRows {
         )
     }
     catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-EXORecipient MemberOfGroup' -Message $_.Exception.Message
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-Recipient MemberOfGroup' -Message $_.Exception.Message
         return @()
     }
 }
@@ -332,7 +332,7 @@ function Get-TargetRecipients {
     if ($PSCmdlet.ParameterSetName -eq 'All') {
         Write-Host "Loading Exchange recipients..." -ForegroundColor Cyan
         return @(
-            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses,MemberOfGroup |
+            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses |
                 Where-Object { Test-RecipientMatchesType -Recipient $_ -SelectedRecipientType $RecipientType }
         )
     }
@@ -342,7 +342,7 @@ function Get-TargetRecipients {
 
     foreach ($inputIdentity in $identities) {
         try {
-            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses,MemberOfGroup -ErrorAction Stop
+            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses -ErrorAction Stop
             if (Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType $RecipientType) {
                 $recipients.Add($recipient) | Out-Null
             }

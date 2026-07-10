@@ -24,6 +24,7 @@ For Exchange Online exports, confirm the account can run the read cmdlets used b
 
 ```powershell
 Get-EXORecipient -ResultSize 1
+Get-Recipient -Identity user@contoso.com
 Get-MailboxPermission -Identity user@contoso.com
 Get-RecipientPermission -Identity user@contoso.com
 ```
