@@ -501,6 +501,19 @@ function Join-Values {
     return (@($Values) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique) -join '; '
 }
 
+function Group-RowsByIdentity {
+    param([Parameter(Mandatory = $false)] [AllowEmptyCollection()] [object[]]$Rows)
+
+    $index = @{}
+    foreach ($row in @($Rows)) {
+        if ($null -eq $row) { continue }
+        $key = [string]$row.Identity
+        if (-not $index.ContainsKey($key)) { $index[$key] = [System.Collections.Generic.List[object]]::new() }
+        $index[$key].Add($row) | Out-Null
+    }
+    return $index
+}
+
 function New-ConsolidatedRows {
     param(
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Objects,
@@ -511,6 +524,13 @@ function New-ConsolidatedRows {
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$EntraGroupRows,
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ErrorRows
     )
+
+    $proxyIndex = Group-RowsByIdentity -Rows $ProxyRows
+    $fullAccessIndex = Group-RowsByIdentity -Rows $FullAccessRows
+    $sendAsIndex = Group-RowsByIdentity -Rows $SendAsRows
+    $exchangeGroupIndex = Group-RowsByIdentity -Rows $ExchangeGroupRows
+    $entraGroupIndex = Group-RowsByIdentity -Rows $EntraGroupRows
+    $errorIndex = Group-RowsByIdentity -Rows $ErrorRows
 
     foreach ($object in $Objects) {
         $identity = [string]$object.Identity
@@ -524,12 +544,12 @@ function New-ConsolidatedRows {
             Alias                     = $object.Alias
             ExternalDirectoryObjectId = $object.ExternalDirectoryObjectId
             ExchangeObjectId          = $object.ExchangeObjectId
-            ProxyAddresses            = Join-Values (($ProxyRows | Where-Object { $_.Identity -eq $identity }).RawProxyAddress)
-            FullAccessTrustees        = Join-Values (($FullAccessRows | Where-Object { $_.Identity -eq $identity }).Trustee)
-            SendAsTrustees            = Join-Values (($SendAsRows | Where-Object { $_.Identity -eq $identity }).Trustee)
-            ExchangeGroupMemberships  = Join-Values (($ExchangeGroupRows | Where-Object { $_.Identity -eq $identity }).GroupIdentity)
-            EntraGroupMemberships     = Join-Values (($EntraGroupRows | Where-Object { $_.Identity -eq $identity }).GroupDisplayName)
-            HasErrors                 = [bool](@($ErrorRows | Where-Object { $_.Identity -eq $identity }).Count -gt 0)
+            ProxyAddresses            = Join-Values (@($proxyIndex[$identity]) | ForEach-Object { $_.RawProxyAddress })
+            FullAccessTrustees        = Join-Values (@($fullAccessIndex[$identity]) | ForEach-Object { $_.Trustee })
+            SendAsTrustees            = Join-Values (@($sendAsIndex[$identity]) | ForEach-Object { $_.Trustee })
+            ExchangeGroupMemberships  = Join-Values (@($exchangeGroupIndex[$identity]) | ForEach-Object { $_.GroupIdentity })
+            EntraGroupMemberships     = Join-Values (@($entraGroupIndex[$identity]) | ForEach-Object { $_.GroupDisplayName })
+            HasErrors                 = [bool]($errorIndex.ContainsKey($identity) -and $errorIndex[$identity].Count -gt 0)
         }
     }
 }
@@ -761,23 +781,20 @@ $objects = @($targetRecipients | ForEach-Object { ConvertTo-ExportObject -Recipi
 Write-Host "Objects selected: $($objects.Count)" -ForegroundColor Green
 
 $graphConnected = Connect-GraphIfNeeded
-$entraGroupMembershipRows = New-Object System.Collections.Generic.List[object]
 
-$proxyRows = New-Object System.Collections.Generic.List[object]
-$fullAccessRows = New-Object System.Collections.Generic.List[object]
-$sendAsRows = New-Object System.Collections.Generic.List[object]
-$exchangeGroupMembershipRows = New-Object System.Collections.Generic.List[object]
+$proxyRows = [System.Collections.Generic.List[object]]::new()
+$fullAccessRows = [System.Collections.Generic.List[object]]::new()
+$sendAsRows = [System.Collections.Generic.List[object]]::new()
+$exchangeGroupMembershipRows = [System.Collections.Generic.List[object]]::new()
+$entraGroupMembershipRows = [System.Collections.Generic.List[object]]::new()
 
-$index = 0
+# Phase 2: proxy addresses (in-memory, from the Phase 1 inventory)
+Write-Host 'Deriving proxy address rows from inventory...' -ForegroundColor Cyan
 foreach ($recipient in $targetRecipients) {
-    $index++
-    Write-Progress -Activity 'Collecting Exchange object data' -Status "$index of $($targetRecipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($targetRecipients.Count, 1)) * 100)
-
     foreach ($row in @(ConvertTo-ProxyRows -Recipient $recipient)) { $proxyRows.Add($row) | Out-Null }
-    foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
 }
-Write-Progress -Activity 'Collecting Exchange object data' -Completed
 
+# Phase 3: group memberships (Microsoft Graph $batch)
 if ($graphConnected) {
     Write-Host 'Collecting group memberships via Microsoft Graph...' -ForegroundColor Cyan
     $membershipRows = Get-MembershipRows -Recipients $targetRecipients
@@ -788,8 +805,19 @@ else {
     Write-Host 'Microsoft Graph not connected: membership CSVs will contain headers only.' -ForegroundColor Yellow
 }
 
+# Phase 4a: SendAs permissions (org-wide sweep on -All)
 Write-Host 'Collecting SendAs permissions...' -ForegroundColor Cyan
 foreach ($row in @(Get-SendAsRows -Recipients $targetRecipients -UseOrgWideQuery ($PSCmdlet.ParameterSetName -eq 'All'))) { $sendAsRows.Add($row) | Out-Null }
+
+# Phase 4b: FullAccess permissions (per mailbox; no bulk API exists)
+$mailboxRecipients = @($targetRecipients | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-MailboxType -Recipient $_)) })
+$index = 0
+foreach ($recipient in $mailboxRecipients) {
+    $index++
+    Write-Progress -Activity 'Collecting FullAccess permissions' -Status "$index of $($mailboxRecipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($mailboxRecipients.Count, 1)) * 100)
+    foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
+}
+Write-Progress -Activity 'Collecting FullAccess permissions' -Completed
 
 $consolidatedRows = @(
     New-ConsolidatedRows `

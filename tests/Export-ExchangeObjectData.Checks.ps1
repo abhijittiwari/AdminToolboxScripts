@@ -208,6 +208,31 @@ function Test-LookupIdentityHelperRemoved {
 }
 Test-LookupIdentityHelperRemoved
 
+function Test-Consolidation {
+    $objects = @([pscustomobject]@{
+        Identity = 'Jane Doe'; DisplayName = 'Jane Doe'; RecipientType = 'UserMailbox'; RecipientTypeDetails = 'UserMailbox'
+        MailboxType = 'UserMailbox'; PrimarySmtpAddress = 'jane@contoso.com'; Alias = 'jane'
+        ExternalDirectoryObjectId = 'aaaa'; ExchangeObjectId = 'bbbb'; DistinguishedName = 'CN=Jane'
+    })
+    $proxy = @(
+        [pscustomobject]@{ Identity = 'Jane Doe'; RawProxyAddress = 'SMTP:jane@contoso.com' },
+        [pscustomobject]@{ Identity = 'Jane Doe'; RawProxyAddress = 'smtp:jane2@contoso.com' }
+    )
+    $sendAs = @([pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'bob@contoso.com' })
+    $errors = @([pscustomobject]@{ Identity = 'Jane Doe'; Stage = 'X'; Operation = 'Y'; Message = 'Z' })
+
+    $index = Group-RowsByIdentity -Rows $proxy
+    Assert-True -Condition ($index['Jane Doe'].Count -eq 2) -Name 'Group-RowsByIdentity groups rows'
+    Assert-True -Condition ((Group-RowsByIdentity -Rows @()).Count -eq 0) -Name 'Group-RowsByIdentity handles empty input'
+
+    $consolidated = @(New-ConsolidatedRows -Objects $objects -ProxyRows $proxy -FullAccessRows @() -SendAsRows $sendAs -ExchangeGroupRows @() -EntraGroupRows @() -ErrorRows $errors)
+    Assert-True -Condition ($consolidated.Count -eq 1) -Name 'New-ConsolidatedRows emits one row per object'
+    Assert-True -Condition ($consolidated[0].ProxyAddresses -eq 'SMTP:jane@contoso.com; smtp:jane2@contoso.com') -Name 'New-ConsolidatedRows joins proxies sorted'
+    Assert-True -Condition ($consolidated[0].SendAsTrustees -eq 'bob@contoso.com' -and $consolidated[0].FullAccessTrustees -eq '') -Name 'New-ConsolidatedRows joins trustees and handles empty sets'
+    Assert-True -Condition ($consolidated[0].HasErrors -eq $true) -Name 'New-ConsolidatedRows flags errors'
+}
+Test-Consolidation
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
