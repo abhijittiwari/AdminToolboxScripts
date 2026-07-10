@@ -2,7 +2,7 @@
 
 ## Export-ExchangeObjectData.ps1
 
-Exports Exchange Online recipient data, permission data, group memberships, and dashboard output.
+Exports Exchange Online recipient data, permission data, group memberships, and dashboard output. It builds a bulk recipient inventory (including proxy addresses) from Exchange Online, collects group memberships via Microsoft Graph `$batch` requests, gathers SendAs permissions in one org-wide sweep on `-All` runs, and looks up FullAccess permissions per mailbox by GUID.
 
 ### Common Uses
 
@@ -15,7 +15,7 @@ Exports Exchange Online recipient data, permission data, group memberships, and 
 
 - PowerShell.
 - `ExchangeOnlineManagement` module.
-- Microsoft Graph PowerShell modules unless `-SkipGraph` is used.
+- `Microsoft.Graph.Authentication` module unless `-SkipGraph` is used.
 - Exchange Online read access for recipients and permissions.
 - Graph delegated permissions such as `User.Read.All`, `Group.Read.All`, and `Directory.Read.All` for Entra membership enrichment.
 
@@ -65,6 +65,8 @@ Exchange Online RBAC varies by tenant, but the account must be allowed to run re
 | `EntraGroupMemberships.csv` | One row per Entra ID group membership. |
 | `Errors.csv` | Lookup and export errors. Headers-only means no logged errors. |
 | `Dashboard.html` | Static local dashboard for `-All` and `-InputCsv` runs unless suppressed. |
+
+`ExchangeGroupMemberships.csv` `GroupIdentity` contains the group display name, with the group's mail address in parentheses when present (sourced from Microsoft Graph).
 
 ### Validation Notes
 

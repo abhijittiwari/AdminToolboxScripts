@@ -20,13 +20,13 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 
 ## Export-ExchangeObjectData.ps1
 
-Exports Exchange Online recipient data for mailboxes by default, or for selected recipient object types. The script can process all matching recipients, multiple identities from a CSV, or a single identity. It exports proxy addresses, FullAccess permissions, SendAs permissions, Exchange group memberships, Entra ID group memberships, normalized CSV files, a consolidated CSV, and a searchable HTML dashboard for multi-object runs.
+Exports Exchange Online recipient data for mailboxes by default, or for selected recipient object types. The script can process all matching recipients, multiple identities from a CSV, or a single identity. It builds a bulk recipient inventory (including proxy addresses) from Exchange Online, collects Exchange and Entra ID group memberships via Microsoft Graph `$batch` requests, gathers SendAs permissions in one org-wide sweep on `-All` runs, and looks up FullAccess permissions per mailbox by GUID, then writes normalized CSV files, a consolidated CSV, and a searchable HTML dashboard for multi-object runs.
 
 ### Requirements
 
 - PowerShell.
 - ExchangeOnlineManagement module: `Install-Module ExchangeOnlineManagement`.
-- Microsoft.Graph modules for Entra group membership enrichment.
+- Microsoft.Graph.Authentication module for Entra group membership enrichment: `Install-Module Microsoft.Graph.Authentication`.
 - Exchange Online permission to read recipients and permissions.
 - Microsoft Graph delegated scopes for Entra group memberships:
   - `User.Read.All`
