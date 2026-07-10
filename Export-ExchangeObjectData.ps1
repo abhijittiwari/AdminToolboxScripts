@@ -111,8 +111,109 @@ function Get-InputIdentityList {
     return @()
 }
 
+function Test-RecipientMatchesType {
+    param(
+        [Parameter(Mandatory = $true)] $Recipient,
+        [Parameter(Mandatory = $true)] [string]$SelectedRecipientType
+    )
+
+    if ($SelectedRecipientType -eq 'All') {
+        return $true
+    }
+
+    $typeDetails = [string]$Recipient.RecipientTypeDetails
+    $type = [string]$Recipient.RecipientType
+
+    switch ($SelectedRecipientType) {
+        'Mailbox' {
+            return ($typeDetails -match 'Mailbox$' -or $type -eq 'UserMailbox')
+        }
+        'Group' {
+            return ($typeDetails -match 'Group$' -or $typeDetails -match 'DistributionGroup' -or $typeDetails -eq 'MailUniversalSecurityGroup')
+        }
+        'MailUser' {
+            return ($typeDetails -eq 'MailUser' -or $type -eq 'MailUser')
+        }
+        'MailContact' {
+            return ($typeDetails -eq 'MailContact' -or $type -eq 'MailContact')
+        }
+    }
+
+    return $false
+}
+
+function Get-MailboxType {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    $typeDetails = [string]$Recipient.RecipientTypeDetails
+    if ($typeDetails -match 'Mailbox$') {
+        return $typeDetails
+    }
+
+    if ([string]$Recipient.RecipientType -eq 'UserMailbox') {
+        return 'UserMailbox'
+    }
+
+    return ''
+}
+
+function ConvertTo-ExportObject {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    [pscustomobject]@{
+        Identity                  = [string]$Recipient.Identity
+        DisplayName               = [string]$Recipient.DisplayName
+        RecipientType             = [string]$Recipient.RecipientType
+        RecipientTypeDetails      = [string]$Recipient.RecipientTypeDetails
+        MailboxType               = Get-MailboxType -Recipient $Recipient
+        PrimarySmtpAddress        = [string]$Recipient.PrimarySmtpAddress
+        Alias                     = [string]$Recipient.Alias
+        ExternalDirectoryObjectId = [string]$Recipient.ExternalDirectoryObjectId
+        ExchangeObjectId          = [string]$Recipient.Guid
+        DistinguishedName         = [string]$Recipient.DistinguishedName
+    }
+}
+
+function Get-TargetRecipients {
+    if ($PSCmdlet.ParameterSetName -eq 'All') {
+        Write-Host "Loading Exchange recipients..." -ForegroundColor Cyan
+        return @(
+            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName |
+                Where-Object { Test-RecipientMatchesType -Recipient $_ -SelectedRecipientType $RecipientType }
+        )
+    }
+
+    $identities = @(Get-InputIdentityList)
+    $recipients = New-Object System.Collections.Generic.List[object]
+
+    foreach ($inputIdentity in $identities) {
+        try {
+            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName -ErrorAction Stop
+            if (Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType $RecipientType) {
+                $recipients.Add($recipient) | Out-Null
+            }
+            else {
+                Add-ExportError -Identity $inputIdentity -Stage 'RecipientTypeFilter' -Operation 'FilterRecipient' -Message "Recipient '$($recipient.DisplayName)' does not match selected recipient type '$RecipientType'."
+            }
+        }
+        catch {
+            Add-ExportError -Identity $inputIdentity -Stage 'RecipientLookup' -Operation 'Get-EXORecipient' -Message $_.Exception.Message
+        }
+    }
+
+    return @($recipients)
+}
+
 $resolvedOutputFolder = Initialize-OutputFolder -OutputFolder $OutputFolder
 $isMultiObjectRun = $PSCmdlet.ParameterSetName -in @('All', 'Csv')
 
 Write-Host "Output folder: $resolvedOutputFolder" -ForegroundColor Cyan
 Write-Host "Recipient type: $RecipientType" -ForegroundColor Cyan
+
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+Connect-ExchangeOnline -ShowBanner:$false
+
+$targetRecipients = @(Get-TargetRecipients)
+$objects = @($targetRecipients | ForEach-Object { ConvertTo-ExportObject -Recipient $_ })
+
+Write-Host "Objects selected: $($objects.Count)" -ForegroundColor Green
