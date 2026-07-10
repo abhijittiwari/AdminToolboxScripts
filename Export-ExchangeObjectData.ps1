@@ -177,24 +177,31 @@ function ConvertTo-ExportObject {
 function Get-ProxyAddressRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
-    $rows = New-Object System.Collections.Generic.List[object]
-    foreach ($address in @($Recipient.EmailAddresses)) {
-        if ($null -eq $address) { continue }
-        $value = $address.ToString()
-        $parts = $value -split ':', 2
-        $prefix = if ($parts.Count -eq 2) { $parts[0] } else { '' }
-        $addressValue = if ($parts.Count -eq 2) { $parts[1] } else { $value }
+    try {
+        $recipientDetails = Get-Recipient -Identity $Recipient.Identity -ErrorAction Stop
+        $rows = New-Object System.Collections.Generic.List[object]
+        foreach ($address in @($recipientDetails.EmailAddresses)) {
+            if ($null -eq $address) { continue }
+            $value = $address.ToString()
+            $parts = $value -split ':', 2
+            $prefix = if ($parts.Count -eq 2) { $parts[0] } else { '' }
+            $addressValue = if ($parts.Count -eq 2) { $parts[1] } else { $value }
 
-        $rows.Add([pscustomobject]@{
-            Identity           = [string]$Recipient.Identity
-            PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
-            AddressType        = $prefix
-            ProxyAddress       = $addressValue
-            RawProxyAddress    = $value
-            IsPrimarySmtp      = $value.StartsWith('SMTP:')
-        }) | Out-Null
+            $rows.Add([pscustomobject]@{
+                Identity           = [string]$Recipient.Identity
+                PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
+                AddressType        = $prefix
+                ProxyAddress       = $addressValue
+                RawProxyAddress    = $value
+                IsPrimarySmtp      = $value.StartsWith('SMTP:')
+            }) | Out-Null
+        }
+        return @($rows)
     }
-    return @($rows)
+    catch {
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ProxyAddresses' -Operation 'Get-Recipient EmailAddresses' -Message $_.Exception.Message
+        return @()
+    }
 }
 
 function Get-FullAccessRows {
@@ -332,7 +339,7 @@ function Get-TargetRecipients {
     if ($PSCmdlet.ParameterSetName -eq 'All') {
         Write-Host "Loading Exchange recipients..." -ForegroundColor Cyan
         return @(
-            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses |
+            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName |
                 Where-Object { Test-RecipientMatchesType -Recipient $_ -SelectedRecipientType $RecipientType }
         )
     }
@@ -342,7 +349,7 @@ function Get-TargetRecipients {
 
     foreach ($inputIdentity in $identities) {
         try {
-            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses -ErrorAction Stop
+            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName -ErrorAction Stop
             if (Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType $RecipientType) {
                 $recipients.Add($recipient) | Out-Null
             }
