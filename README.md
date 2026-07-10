@@ -24,11 +24,11 @@ Exports Exchange Online recipient data for mailboxes by default, or for selected
 
 ### Requirements
 
-- PowerShell.
+- PowerShell 7 recommended (Windows PowerShell 5.1 compatible).
 - ExchangeOnlineManagement module: `Install-Module ExchangeOnlineManagement`.
-- Microsoft.Graph.Authentication module for Entra group membership enrichment: `Install-Module Microsoft.Graph.Authentication`.
+- Microsoft.Graph.Authentication module: `Install-Module Microsoft.Graph.Authentication`.
 - Exchange Online permission to read recipients and permissions.
-- Microsoft Graph delegated scopes for Entra group memberships:
+- Microsoft Graph delegated scopes for group memberships:
   - `User.Read.All`
   - `Group.Read.All`
   - `Directory.Read.All`
@@ -37,7 +37,7 @@ Graph permissions may require admin consent depending on tenant policy.
 
 ### Connection Behavior
 
-The script connects to Exchange Online on every run. Unless `-SkipGraph` is used, it also connects to Microsoft Graph to enrich Entra ID group memberships; with `-SkipGraph`, Graph connection and `EntraGroupMemberships.csv` enrichment are skipped.
+The script connects to Exchange Online on every run. Unless `-SkipGraph` is used, it also connects to Microsoft Graph to collect group memberships; both `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` are Graph-sourced, so with `-SkipGraph`, Graph connection is skipped and both files are written headers-only.
 
 ### Parameters
 
@@ -49,7 +49,7 @@ The script connects to Exchange Online on every run. Unless `-SkipGraph` is used
 | `-IdentityColumn` | String | `Identity` | CSV column containing identities. |
 | `-RecipientType` | String | `Mailbox` | Object type filter: `Mailbox`, `Group`, `MailUser`, `MailContact`, or `All`. |
 | `-OutputFolder` | String | Timestamped folder | Folder where CSVs and dashboard are written. |
-| `-SkipGraph` | Switch | Off | Skips Microsoft Graph connection and Entra group membership export. |
+| `-SkipGraph` | Switch | Off | Skips Microsoft Graph connection; `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` are written headers-only. |
 | `-NoDashboard` | Switch | Off | Suppresses `Dashboard.html` generation for multi-object runs. |
 
 ### Usage
@@ -91,7 +91,7 @@ The dashboard is a static local HTML file. It supports search, checkbox selectio
 - Confirm the output folder contains the expected CSV files and, for `-All` or `-InputCsv` runs without `-NoDashboard`, `Dashboard.html`.
 - For multi-object runs, open `Dashboard.html` and verify search, checkbox selection, row expansion, and selected-row CSV export; for single `-Identity` runs, confirm no dashboard is expected.
 - Review `Errors.csv` after every run. An empty file or headers-only file indicates no logged lookup/export errors; any rows should be checked against console warnings and expected access limitations.
-- Spot-check a small sample of objects against Exchange Online: primary SMTP and proxy addresses in `ProxyAddresses.csv`, mailbox type in `Objects.csv`, FullAccess/SendAs permissions, Exchange group memberships, and Entra group memberships when Graph was not skipped.
+- Spot-check a small sample of objects against Exchange Online: primary SMTP and proxy addresses in `ProxyAddresses.csv`, mailbox type in `Objects.csv`, FullAccess/SendAs permissions, and Exchange/Entra group memberships when Graph was not skipped.
 
 ### Notes
 

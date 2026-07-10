@@ -9,7 +9,7 @@
 
 .NOTES
     Requires: ExchangeOnlineManagement
-    Optional Graph enrichment requires: Microsoft.Graph
+    Group membership collection requires: Microsoft.Graph.Authentication
     This script is read-only. It does not modify Exchange or Entra objects.
 
 .EXAMPLE
@@ -354,6 +354,11 @@ function Invoke-GraphBatch {
                 continue
             }
 
+            if (@($response.responses | Where-Object { $null -ne $_ }).Count -eq 0 -and $chunk.Count -gt 0) {
+                foreach ($item in $chunk) { $retryQueue.Add($item) | Out-Null }
+                continue
+            }
+
             foreach ($item in @($response.responses)) {
                 $itemId = [string]$item.id
                 $status = [int]$item.status
@@ -363,8 +368,8 @@ function Invoke-GraphBatch {
                 elseif ($status -in @(429, 502, 503, 504)) {
                     $retryQueue.Add(($chunk | Where-Object { [string]$_.Id -eq $itemId } | Select-Object -First 1)) | Out-Null
                     if ($item.headers -and $item.headers.'Retry-After') {
-                        $headerDelay = [double]$item.headers.'Retry-After'
-                        if ($headerDelay -gt $delaySeconds) { $delaySeconds = $headerDelay }
+                        $headerDelay = 0.0
+                        if ([double]::TryParse([string]$item.headers.'Retry-After', [ref]$headerDelay) -and $headerDelay -gt $delaySeconds) { $delaySeconds = $headerDelay }
                     }
                 }
                 else {
@@ -381,7 +386,7 @@ function Invoke-GraphBatch {
 
     Write-Progress -Activity $Activity -Completed
     foreach ($leftover in $pending) {
-        if ($OnItemError) { & $OnItemError ([string]$leftover.Id) "Gave up after $MaxAttempts attempts (throttled)" }
+        if ($OnItemError) { & $OnItemError ([string]$leftover.Id) "Gave up after $MaxAttempts attempts (throttled or failed)" }
     }
 
     return $results

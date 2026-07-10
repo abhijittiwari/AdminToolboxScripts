@@ -119,6 +119,17 @@ function Test-InvokeGraphBatch {
     }
     $results = Invoke-GraphBatch -Requests @(@{ Id = 'r1'; Url = '/x' }) -GraphRequest $mockAlways429 -MaxAttempts 2 -OnItemError $onError
     Assert-True -Condition ($results.Count -eq 0 -and $script:ItemErrors.Count -eq 1) -Name 'Invoke-GraphBatch gives up after MaxAttempts'
+
+    # Batch POST succeeds but returns no responses -> chunk requeued, then succeeds.
+    $script:EmptyAttempt = 0
+    $mockEmptyThenOk = {
+        param($Method, $Uri, $Body)
+        $script:EmptyAttempt++
+        if ($script:EmptyAttempt -eq 1) { return @{ responses = @() } }
+        return @{ responses = @($Body.requests | ForEach-Object { @{ id = $_.id; status = 200; body = @{ value = @() } } }) }
+    }
+    $results = Invoke-GraphBatch -Requests @(@{ Id = 'r1'; Url = '/x' }) -GraphRequest $mockEmptyThenOk
+    Assert-True -Condition ($results.Count -eq 1 -and $script:EmptyAttempt -eq 2) -Name 'Invoke-GraphBatch requeues chunk when batch response is empty'
 }
 Test-InvokeGraphBatch
 

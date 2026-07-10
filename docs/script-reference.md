@@ -17,7 +17,7 @@ Exports Exchange Online recipient data, permission data, group memberships, and 
 - `ExchangeOnlineManagement` module.
 - `Microsoft.Graph.Authentication` module unless `-SkipGraph` is used.
 - Exchange Online read access for recipients and permissions.
-- Graph delegated permissions such as `User.Read.All`, `Group.Read.All`, and `Directory.Read.All` for Entra membership enrichment.
+- Graph delegated permissions such as `User.Read.All`, `Group.Read.All`, and `Directory.Read.All` for group membership collection.
 
 Exchange Online RBAC varies by tenant, but the account must be allowed to run read cmdlets such as `Get-EXORecipient`, `Get-MailboxPermission`, and `Get-RecipientPermission`. Start with a read-only role group such as View-Only Organization Management where possible, and add only the additional recipient or permission-read roles required by your tenant policy.
 
@@ -31,7 +31,7 @@ Exchange Online RBAC varies by tenant, but the account must be allowed to run re
 | `-IdentityColumn <name>` | CSV column containing identities. Defaults to `Identity`. |
 | `-RecipientType <type>` | `Mailbox`, `Group`, `MailUser`, `MailContact`, or `All`. Defaults to `Mailbox`. |
 | `-OutputFolder <path>` | Destination folder for CSV and dashboard output. |
-| `-SkipGraph` | Skip Microsoft Graph connection and Entra membership enrichment. |
+| `-SkipGraph` | Skip Microsoft Graph connection; `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` are emitted headers-only. |
 | `-NoDashboard` | Suppress dashboard generation for multi-object runs. |
 
 ### Examples
@@ -73,7 +73,8 @@ Exchange Online RBAC varies by tenant, but the account must be allowed to run re
 - Confirm `MailboxType` values for mailbox exports, especially shared, room, and equipment mailboxes.
 - Check `Errors.csv` for skipped objects, permission lookup failures, and Graph lookup failures.
 - For CSV input, confirm skipped recipient-type mismatches are logged with `RecipientTypeFilter`.
-- If `-SkipGraph` is used, expect no Entra membership enrichment.
+- If `-SkipGraph` is used, expect both `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` to be emitted headers-only.
+- On `-All` runs, SendAs permissions are collected in one org-wide sweep joined to recipients by Exchange Identity; recipients sharing a display name can be misattributed, so verify SendAs row counts when duplicate display names exist in the tenant.
 
 ## Get-EntraAdminAccounts.ps1
 
