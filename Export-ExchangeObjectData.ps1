@@ -351,6 +351,68 @@ function Get-TargetRecipients {
     return @($recipients)
 }
 
+function Join-Values {
+    param([Parameter(Mandatory = $false)] $Values)
+
+    return (@($Values) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique) -join '; '
+}
+
+function New-ConsolidatedRows {
+    param(
+        [Parameter(Mandatory = $true)] [object[]]$Objects,
+        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows,
+        [Parameter(Mandatory = $true)] [object[]]$ErrorRows
+    )
+
+    foreach ($object in $Objects) {
+        $identity = [string]$object.Identity
+        [pscustomobject]@{
+            Identity                  = $object.Identity
+            DisplayName               = $object.DisplayName
+            RecipientType             = $object.RecipientType
+            RecipientTypeDetails      = $object.RecipientTypeDetails
+            MailboxType               = $object.MailboxType
+            PrimarySmtpAddress        = $object.PrimarySmtpAddress
+            Alias                     = $object.Alias
+            ExternalDirectoryObjectId = $object.ExternalDirectoryObjectId
+            ExchangeObjectId          = $object.ExchangeObjectId
+            ProxyAddresses            = Join-Values (($ProxyRows | Where-Object { $_.Identity -eq $identity }).RawProxyAddress)
+            FullAccessTrustees        = Join-Values (($FullAccessRows | Where-Object { $_.Identity -eq $identity }).Trustee)
+            SendAsTrustees            = Join-Values (($SendAsRows | Where-Object { $_.Identity -eq $identity }).Trustee)
+            ExchangeGroupMemberships  = Join-Values (($ExchangeGroupRows | Where-Object { $_.Identity -eq $identity }).GroupIdentity)
+            EntraGroupMemberships     = Join-Values (($EntraGroupRows | Where-Object { $_.Identity -eq $identity }).GroupDisplayName)
+            HasErrors                 = [bool](@($ErrorRows | Where-Object { $_.Identity -eq $identity }).Count -gt 0)
+        }
+    }
+}
+
+function Export-ReportCsvs {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Folder,
+        [Parameter(Mandatory = $true)] [object[]]$Objects,
+        [Parameter(Mandatory = $true)] [object[]]$ConsolidatedRows,
+        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows,
+        [Parameter(Mandatory = $true)] [object[]]$ErrorRows
+    )
+
+    $ConsolidatedRows | Export-Csv -Path (Join-Path $Folder 'Objects-Consolidated.csv') -NoTypeInformation -Encoding UTF8
+    $Objects | Export-Csv -Path (Join-Path $Folder 'Objects.csv') -NoTypeInformation -Encoding UTF8
+    $ProxyRows | Export-Csv -Path (Join-Path $Folder 'ProxyAddresses.csv') -NoTypeInformation -Encoding UTF8
+    $FullAccessRows | Export-Csv -Path (Join-Path $Folder 'FullAccess.csv') -NoTypeInformation -Encoding UTF8
+    $SendAsRows | Export-Csv -Path (Join-Path $Folder 'SendAs.csv') -NoTypeInformation -Encoding UTF8
+    $ExchangeGroupRows | Export-Csv -Path (Join-Path $Folder 'ExchangeGroupMemberships.csv') -NoTypeInformation -Encoding UTF8
+    $EntraGroupRows | Export-Csv -Path (Join-Path $Folder 'EntraGroupMemberships.csv') -NoTypeInformation -Encoding UTF8
+    $ErrorRows | Export-Csv -Path (Join-Path $Folder 'Errors.csv') -NoTypeInformation -Encoding UTF8
+}
+
 $resolvedOutputFolder = Initialize-OutputFolder -OutputFolder $OutputFolder
 $isMultiObjectRun = $PSCmdlet.ParameterSetName -in @('All', 'Csv')
 
@@ -387,3 +449,27 @@ foreach ($recipient in $targetRecipients) {
     }
 }
 Write-Progress -Activity 'Collecting Exchange object data' -Completed
+
+$consolidatedRows = @(
+    New-ConsolidatedRows `
+        -Objects $objects `
+        -ProxyRows @($proxyRows) `
+        -FullAccessRows @($fullAccessRows) `
+        -SendAsRows @($sendAsRows) `
+        -ExchangeGroupRows @($exchangeGroupMembershipRows) `
+        -EntraGroupRows @($entraGroupMembershipRows) `
+        -ErrorRows @($script:Errors)
+)
+
+Export-ReportCsvs `
+    -Folder $resolvedOutputFolder `
+    -Objects $objects `
+    -ConsolidatedRows $consolidatedRows `
+    -ProxyRows @($proxyRows) `
+    -FullAccessRows @($fullAccessRows) `
+    -SendAsRows @($sendAsRows) `
+    -ExchangeGroupRows @($exchangeGroupMembershipRows) `
+    -EntraGroupRows @($entraGroupMembershipRows) `
+    -ErrorRows @($script:Errors)
+
+Write-Host "CSV exports written to: $resolvedOutputFolder" -ForegroundColor Green
