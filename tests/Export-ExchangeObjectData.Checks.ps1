@@ -162,6 +162,52 @@ function Test-OldMembershipFunctionsRemoved {
 }
 Test-OldMembershipFunctionsRemoved
 
+function Test-SendAsAndFullAccess {
+    $recipients = @(
+        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; Guid = [guid]'22222222-2222-2222-2222-222222222222'; RecipientTypeDetails = 'UserMailbox'; RecipientType = 'UserMailbox' }
+    )
+
+    # Org-wide mode: mock returns rows for an in-scope recipient, an out-of-scope one, and a SELF trustee.
+    function Get-RecipientPermission {
+        param($Identity, $ResultSize, $ErrorAction)
+        @(
+            [pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'bob@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false },
+            [pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'NT AUTHORITY\SELF'; AccessRights = @('SendAs'); IsInherited = $false },
+            [pscustomobject]@{ Identity = 'Someone Else'; Trustee = 'eve@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false }
+        )
+    }
+    $rows = @(Get-SendAsRows -Recipients $recipients -UseOrgWideQuery $true)
+    Assert-True -Condition ($rows.Count -eq 1 -and $rows[0].Trustee -eq 'bob@contoso.com') -Name 'Get-SendAsRows org-wide filters to inventory and drops SELF'
+
+    # Per-identity mode must pass the Guid, not the display name.
+    $script:SendAsLookups = [System.Collections.Generic.List[string]]::new()
+    function Get-RecipientPermission {
+        param($Identity, $ResultSize, $ErrorAction)
+        $script:SendAsLookups.Add([string]$Identity) | Out-Null
+        @([pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'bob@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false })
+    }
+    $rows = @(Get-SendAsRows -Recipients $recipients -UseOrgWideQuery $false)
+    Assert-True -Condition ($script:SendAsLookups[0] -eq '22222222-2222-2222-2222-222222222222') -Name 'Get-SendAsRows per-identity uses Guid'
+
+    # FullAccess must pass the Guid too.
+    $script:FullAccessLookups = [System.Collections.Generic.List[string]]::new()
+    function Get-EXOMailboxPermission {
+        param($Identity, $ErrorAction)
+        $script:FullAccessLookups.Add([string]$Identity) | Out-Null
+        @([pscustomobject]@{ User = 'bob@contoso.com'; AccessRights = @('FullAccess'); IsInherited = $false; Deny = $false })
+    }
+    $rows = @(Get-FullAccessRows -Recipient $recipients[0])
+    Assert-True -Condition ($script:FullAccessLookups[0] -eq '22222222-2222-2222-2222-222222222222') -Name 'Get-FullAccessRows uses Guid'
+    Assert-True -Condition ($rows.Count -eq 1 -and $rows[0].Trustee -eq 'bob@contoso.com') -Name 'Get-FullAccessRows maps rows'
+}
+Test-SendAsAndFullAccess
+
+function Test-LookupIdentityHelperRemoved {
+    $scriptText = Get-Content -Path $script:ScriptPath -Raw
+    Assert-True -Condition ($scriptText -notmatch 'Get-ExchangeLookupIdentity') -Name 'Get-ExchangeLookupIdentity removed'
+}
+Test-LookupIdentityHelperRemoved
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

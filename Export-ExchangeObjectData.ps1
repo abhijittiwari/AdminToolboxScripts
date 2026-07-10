@@ -174,25 +174,6 @@ function ConvertTo-ExportObject {
     }
 }
 
-function Get-ExchangeLookupIdentity {
-    param([Parameter(Mandatory = $true)] $Recipient)
-
-    foreach ($candidate in @(
-            $Recipient.PrimarySmtpAddress,
-            $Recipient.Alias,
-            $Recipient.DistinguishedName,
-            $Recipient.Guid,
-            $Recipient.Identity
-        )) {
-        $value = [string]$candidate
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            return $value
-        }
-    }
-
-    return [string]$Recipient.Identity
-}
-
 function ConvertTo-ProxyRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
@@ -224,7 +205,7 @@ function Get-FullAccessRows {
         return @()
     }
 
-    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+    $lookupIdentity = [string]$Recipient.Guid
 
     try {
         return @(
@@ -256,29 +237,58 @@ function Test-IsSelfTrustee {
 }
 
 function Get-SendAsRows {
-    param([Parameter(Mandatory = $true)] $Recipient)
+    param(
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Recipients,
+        [Parameter(Mandatory = $true)] [bool]$UseOrgWideQuery
+    )
 
-    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+    $rows = [System.Collections.Generic.List[object]]::new()
 
-    try {
-        return @(
-            Get-RecipientPermission -Identity $lookupIdentity -ErrorAction Stop |
-                Where-Object { -not $_.IsInherited -and -not (Test-IsSelfTrustee -Trustee ([string]$_.Trustee)) -and ($_.AccessRights -contains 'SendAs') } |
-                ForEach-Object {
-                    [pscustomobject]@{
-                        Identity           = [string]$Recipient.Identity
-                        PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
-                        Trustee            = [string]$_.Trustee
-                        AccessRights       = ($_.AccessRights -join '; ')
-                        IsInherited        = [bool]$_.IsInherited
-                    }
-                }
-        )
+    if ($UseOrgWideQuery) {
+        $recipientsByIdentity = @{}
+        foreach ($recipient in @($Recipients)) { $recipientsByIdentity[[string]$recipient.Identity] = $recipient }
+        try {
+            foreach ($permission in @(Get-RecipientPermission -ResultSize Unlimited -ErrorAction Stop)) {
+                $identity = [string]$permission.Identity
+                if (-not $recipientsByIdentity.ContainsKey($identity)) { continue }
+                if ($permission.IsInherited) { continue }
+                if (Test-IsSelfTrustee -Trustee ([string]$permission.Trustee)) { continue }
+                if ($permission.AccessRights -notcontains 'SendAs') { continue }
+                $rows.Add([pscustomobject]@{
+                    Identity           = $identity
+                    PrimarySmtpAddress = [string]$recipientsByIdentity[$identity].PrimarySmtpAddress
+                    Trustee            = [string]$permission.Trustee
+                    AccessRights       = ($permission.AccessRights -join '; ')
+                    IsInherited        = [bool]$permission.IsInherited
+                }) | Out-Null
+            }
+        }
+        catch {
+            Add-ExportError -Identity '' -Stage 'SendAs' -Operation 'Get-RecipientPermission (org-wide)' -Message $_.Exception.Message
+        }
+        return @($rows)
     }
-    catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
-        return @()
+
+    foreach ($recipient in @($Recipients)) {
+        try {
+            foreach ($permission in @(Get-RecipientPermission -Identity ([string]$recipient.Guid) -ErrorAction Stop)) {
+                if ($permission.IsInherited) { continue }
+                if (Test-IsSelfTrustee -Trustee ([string]$permission.Trustee)) { continue }
+                if ($permission.AccessRights -notcontains 'SendAs') { continue }
+                $rows.Add([pscustomobject]@{
+                    Identity           = [string]$recipient.Identity
+                    PrimarySmtpAddress = [string]$recipient.PrimarySmtpAddress
+                    Trustee            = [string]$permission.Trustee
+                    AccessRights       = ($permission.AccessRights -join '; ')
+                    IsInherited        = [bool]$permission.IsInherited
+                }) | Out-Null
+            }
+        }
+        catch {
+            Add-ExportError -Identity ([string]$recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message $_.Exception.Message
+        }
     }
+    return @($rows)
 }
 
 function Connect-GraphIfNeeded {
@@ -765,7 +775,6 @@ foreach ($recipient in $targetRecipients) {
 
     foreach ($row in @(ConvertTo-ProxyRows -Recipient $recipient)) { $proxyRows.Add($row) | Out-Null }
     foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
-    foreach ($row in @(Get-SendAsRows -Recipient $recipient)) { $sendAsRows.Add($row) | Out-Null }
 }
 Write-Progress -Activity 'Collecting Exchange object data' -Completed
 
@@ -778,6 +787,9 @@ if ($graphConnected) {
 else {
     Write-Host 'Microsoft Graph not connected: membership CSVs will contain headers only.' -ForegroundColor Yellow
 }
+
+Write-Host 'Collecting SendAs permissions...' -ForegroundColor Cyan
+foreach ($row in @(Get-SendAsRows -Recipients $targetRecipients -UseOrgWideQuery ($PSCmdlet.ParameterSetName -eq 'All'))) { $sendAsRows.Add($row) | Out-Null }
 
 $consolidatedRows = @(
     New-ConsolidatedRows `
