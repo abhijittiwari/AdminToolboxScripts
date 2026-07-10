@@ -281,30 +281,6 @@ function Get-SendAsRows {
     }
 }
 
-function Get-ExchangeGroupMembershipRows {
-    param([Parameter(Mandatory = $true)] $Recipient)
-
-    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
-
-    try {
-        return @(
-            Get-Recipient -Identity $lookupIdentity -ErrorAction Stop |
-                Select-Object -ExpandProperty MemberOfGroup -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    [pscustomobject]@{
-                        Identity           = [string]$Recipient.Identity
-                        PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
-                        GroupIdentity      = [string]$_
-                    }
-                }
-        )
-    }
-    catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-Recipient MemberOfGroup' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
-        return @()
-    }
-}
-
 function Connect-GraphIfNeeded {
     if ($SkipGraph) {
         Write-Host 'Skipping Microsoft Graph connection because -SkipGraph was specified.' -ForegroundColor Yellow
@@ -313,7 +289,6 @@ function Connect-GraphIfNeeded {
 
     try {
         Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-        Import-Module Microsoft.Graph.DirectoryObjects -ErrorAction Stop
         Connect-MgGraph -Scopes @('User.Read.All', 'Group.Read.All', 'Directory.Read.All') -NoWelcome
         return $true
     }
@@ -402,34 +377,82 @@ function Invoke-GraphBatch {
     return $results
 }
 
-function Get-EntraGroupMembershipRows {
-    param([Parameter(Mandatory = $true)] $Recipient)
+function Get-MembershipRows {
+    param(
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Recipients,
+        [Parameter(Mandatory = $false)] [scriptblock]$GraphRequest
+    )
 
-    $externalId = [string]$Recipient.ExternalDirectoryObjectId
-    if ([string]::IsNullOrWhiteSpace($externalId)) {
-        return @()
+    if (-not $GraphRequest) { $GraphRequest = New-GraphRequestExecutor }
+
+    $entraRows = [System.Collections.Generic.List[object]]::new()
+    $exchangeRows = [System.Collections.Generic.List[object]]::new()
+
+    $recipientsById = @{}
+    $requests = [System.Collections.Generic.List[object]]::new()
+    foreach ($recipient in @($Recipients)) {
+        $externalId = [string]$recipient.ExternalDirectoryObjectId
+        if ([string]::IsNullOrWhiteSpace($externalId)) { continue }
+        if ($recipientsById.ContainsKey($externalId)) { continue }
+        $recipientsById[$externalId] = $recipient
+        $requests.Add(@{
+            Id  = $externalId
+            Url = "/directoryObjects/$externalId/memberOf/microsoft.graph.group?`$select=id,displayName,mail,mailEnabled,securityEnabled&`$top=999"
+        }) | Out-Null
     }
 
-    try {
-        return @(
-            Get-MgDirectoryObjectMemberOf -DirectoryObjectId $externalId -All -ErrorAction Stop |
-                Where-Object { $_.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.group' } |
-                ForEach-Object {
-                    [pscustomobject]@{
-                        Identity             = [string]$Recipient.Identity
-                        PrimarySmtpAddress   = [string]$Recipient.PrimarySmtpAddress
-                        GroupId              = [string]$_.Id
-                        GroupDisplayName     = [string]$_.AdditionalProperties.displayName
-                        GroupMail            = [string]$_.AdditionalProperties.mail
-                        GroupSecurityEnabled = [string]$_.AdditionalProperties.securityEnabled
-                    }
-                }
-        )
+    $onItemError = {
+        param($id, $message)
+        $identity = if ($recipientsById.ContainsKey($id)) { [string]$recipientsById[$id].Identity } else { [string]$id }
+        Add-ExportError -Identity $identity -Stage 'GroupMemberships' -Operation 'Graph memberOf' -Message $message
     }
-    catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'EntraGroupMemberships' -Operation 'Get-MgDirectoryObjectMemberOf' -Message $_.Exception.Message
-        return @()
+
+    $responses = Invoke-GraphBatch -Requests @($requests) -GraphRequest $GraphRequest -OnItemError $onItemError -Activity 'Collecting group memberships via Microsoft Graph'
+
+    foreach ($externalId in @($responses.Keys)) {
+        $recipient = $recipientsById[$externalId]
+        $body = $responses[$externalId]
+
+        $groups = [System.Collections.Generic.List[object]]::new()
+        while ($true) {
+            foreach ($group in @($body.value)) {
+                if ($null -ne $group) { $groups.Add($group) | Out-Null }
+            }
+            $nextLink = [string]$body.'@odata.nextLink'
+            if ([string]::IsNullOrWhiteSpace($nextLink)) { break }
+            try {
+                $body = & $GraphRequest 'GET' $nextLink $null
+            }
+            catch {
+                Add-ExportError -Identity ([string]$recipient.Identity) -Stage 'GroupMemberships' -Operation 'Graph memberOf paging' -Message $_.Exception.Message
+                break
+            }
+        }
+
+        foreach ($group in $groups) {
+            $groupMail = [string]$group.mail
+            $entraRows.Add([pscustomobject]@{
+                Identity             = [string]$recipient.Identity
+                PrimarySmtpAddress   = [string]$recipient.PrimarySmtpAddress
+                GroupId              = [string]$group.id
+                GroupDisplayName     = [string]$group.displayName
+                GroupMail            = $groupMail
+                GroupSecurityEnabled = [string]$group.securityEnabled
+            }) | Out-Null
+
+            if ([bool]$group.mailEnabled) {
+                $groupIdentity = [string]$group.displayName
+                if (-not [string]::IsNullOrWhiteSpace($groupMail)) { $groupIdentity = "$groupIdentity ($groupMail)" }
+                $exchangeRows.Add([pscustomobject]@{
+                    Identity           = [string]$recipient.Identity
+                    PrimarySmtpAddress = [string]$recipient.PrimarySmtpAddress
+                    GroupIdentity      = $groupIdentity
+                }) | Out-Null
+            }
+        }
     }
+
+    return @{ Entra = @($entraRows); Exchange = @($exchangeRows) }
 }
 
 function Get-TargetRecipients {
@@ -743,12 +766,18 @@ foreach ($recipient in $targetRecipients) {
     foreach ($row in @(ConvertTo-ProxyRows -Recipient $recipient)) { $proxyRows.Add($row) | Out-Null }
     foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
     foreach ($row in @(Get-SendAsRows -Recipient $recipient)) { $sendAsRows.Add($row) | Out-Null }
-    foreach ($row in @(Get-ExchangeGroupMembershipRows -Recipient $recipient)) { $exchangeGroupMembershipRows.Add($row) | Out-Null }
-    if ($graphConnected) {
-        foreach ($row in @(Get-EntraGroupMembershipRows -Recipient $recipient)) { $entraGroupMembershipRows.Add($row) | Out-Null }
-    }
 }
 Write-Progress -Activity 'Collecting Exchange object data' -Completed
+
+if ($graphConnected) {
+    Write-Host 'Collecting group memberships via Microsoft Graph...' -ForegroundColor Cyan
+    $membershipRows = Get-MembershipRows -Recipients $targetRecipients
+    foreach ($row in @($membershipRows.Exchange)) { $exchangeGroupMembershipRows.Add($row) | Out-Null }
+    foreach ($row in @($membershipRows.Entra)) { $entraGroupMembershipRows.Add($row) | Out-Null }
+}
+else {
+    Write-Host 'Microsoft Graph not connected: membership CSVs will contain headers only.' -ForegroundColor Yellow
+}
 
 $consolidatedRows = @(
     New-ConsolidatedRows `

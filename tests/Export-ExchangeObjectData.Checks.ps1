@@ -122,6 +122,46 @@ function Test-InvokeGraphBatch {
 }
 Test-InvokeGraphBatch
 
+function Test-GetMembershipRows {
+    $recipients = @(
+        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; ExternalDirectoryObjectId = 'aaaaaaaa-0000-0000-0000-000000000001' },
+        [pscustomobject]@{ Identity = 'No Entra'; PrimarySmtpAddress = 'x@contoso.com'; ExternalDirectoryObjectId = '' }
+    )
+    $mock = {
+        param($Method, $Uri, $Body)
+        if ($Method -eq 'POST') {
+            return @{ responses = @($Body.requests | ForEach-Object {
+                @{ id = $_.id; status = 200; body = @{
+                    value = @(
+                        @{ id = 'g1'; displayName = 'Sales DL'; mail = 'sales@contoso.com'; mailEnabled = $true; securityEnabled = $false },
+                        @{ id = 'g2'; displayName = 'Sec Only'; mail = $null; mailEnabled = $false; securityEnabled = $true }
+                    )
+                    '@odata.nextLink' = 'https://graph.microsoft.com/v1.0/page2'
+                } }
+            }) }
+        }
+        # nextLink page fetch
+        return @{ value = @(@{ id = 'g3'; displayName = 'Second Page DL'; mail = 'p2@contoso.com'; mailEnabled = $true; securityEnabled = $false }) }
+    }
+    $result = Get-MembershipRows -Recipients $recipients -GraphRequest $mock 3>$null
+    $entra = @($result.Entra)
+    $exchange = @($result.Exchange)
+    Assert-True -Condition ($entra.Count -eq 3) -Name 'Get-MembershipRows returns all groups as Entra rows'
+    Assert-True -Condition ($exchange.Count -eq 2) -Name 'Get-MembershipRows filters mailEnabled groups into Exchange rows'
+    Assert-True -Condition ($exchange[0].GroupIdentity -eq 'Sales DL (sales@contoso.com)') -Name 'Get-MembershipRows formats GroupIdentity with mail'
+    Assert-True -Condition ($entra[1].GroupDisplayName -eq 'Sec Only' -and $entra[1].GroupMail -eq '') -Name 'Get-MembershipRows maps Entra row columns'
+    Assert-True -Condition (@($entra | Where-Object { $_.GroupDisplayName -eq 'Second Page DL' }).Count -eq 1) -Name 'Get-MembershipRows follows nextLink pages'
+    Assert-True -Condition (@($entra | Where-Object { $_.Identity -eq 'No Entra' }).Count -eq 0) -Name 'Get-MembershipRows skips recipients without ExternalDirectoryObjectId'
+}
+Test-GetMembershipRows
+
+function Test-OldMembershipFunctionsRemoved {
+    $scriptText = Get-Content -Path $script:ScriptPath -Raw
+    Assert-True -Condition ($scriptText -notmatch 'Get-ExchangeGroupMembershipRows' -and $scriptText -notmatch 'Get-EntraGroupMembershipRows') -Name 'Old membership functions removed'
+    Assert-True -Condition ($scriptText -notmatch 'Get-MgDirectoryObjectMemberOf' -and $scriptText -notmatch 'Microsoft\.Graph\.DirectoryObjects') -Name 'Graph SDK entity cmdlets removed'
+}
+Test-OldMembershipFunctionsRemoved
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
