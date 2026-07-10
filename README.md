@@ -29,6 +29,10 @@ Exports Exchange Online recipient data for mailboxes by default, or for selected
 
 Graph permissions may require admin consent depending on tenant policy.
 
+### Connection Behavior
+
+The script connects to Exchange Online on every run. Unless `-SkipGraph` is used, it also connects to Microsoft Graph to enrich Entra ID group memberships; with `-SkipGraph`, Graph connection and `EntraGroupMemberships.csv` enrichment are skipped.
+
 ### Parameters
 
 | Parameter | Type | Default | Description |
@@ -75,6 +79,13 @@ Graph permissions may require admin consent depending on tenant policy.
 ### Dashboard
 
 The dashboard is a static local HTML file. It supports search, checkbox selection, expandable object details, and browser-side CSV export of selected objects and selected detail rows.
+
+### Manual Validation
+
+- Confirm the output folder contains the expected CSV files and, for `-All` or `-InputCsv` runs without `-NoDashboard`, `Dashboard.html`.
+- For multi-object runs, open `Dashboard.html` and verify search, checkbox selection, row expansion, and selected-row CSV export; for single `-Identity` runs, confirm no dashboard is expected.
+- Review `Errors.csv` after every run. An empty file or headers-only file indicates no logged lookup/export errors; any rows should be checked against console warnings and expected access limitations.
+- Spot-check a small sample of objects against Exchange Online: primary SMTP and proxy addresses in `ProxyAddresses.csv`, mailbox type in `Objects.csv`, FullAccess/SendAs permissions, Exchange group memberships, and Entra group memberships when Graph was not skipped.
 
 ### Notes
 
