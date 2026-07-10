@@ -108,6 +108,7 @@ For DNS scripts:
 | Symptom | Likely Cause | Action |
 | --- | --- | --- |
 | Graph connection fails | Missing module, consent, or delegated scope | Install Microsoft.Graph modules and confirm admin consent. |
+| Graph authentication reports a missing MSAL method | Mixed or stale Microsoft.Graph/Microsoft.Identity.Client module versions | Run in PowerShell 7+, then update Microsoft Graph modules with `Update-Module Microsoft.Graph` or reinstall stale Graph modules. Use `-SkipGraph` if Entra membership enrichment is not required. |
 | Exchange connection fails | Missing module or insufficient Exchange permission | Install ExchangeOnlineManagement and verify role assignment. |
 | PIM eligibility warnings | Missing Entra ID P2 or Graph permission | Confirm licensing and `RoleManagement.Read.Directory`. |
 | Empty detail CSV | No matching data or skipped enrichment | Check `Errors.csv`, input filters, and `-SkipGraph`. |

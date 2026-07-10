@@ -174,11 +174,32 @@ function ConvertTo-ExportObject {
     }
 }
 
+function Get-ExchangeLookupIdentity {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    foreach ($candidate in @(
+            $Recipient.PrimarySmtpAddress,
+            $Recipient.Alias,
+            $Recipient.DistinguishedName,
+            $Recipient.Guid,
+            $Recipient.Identity
+        )) {
+        $value = [string]$candidate
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value
+        }
+    }
+
+    return [string]$Recipient.Identity
+}
+
 function Get-ProxyAddressRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
+    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+
     try {
-        $recipientDetails = Get-Recipient -Identity $Recipient.Identity -ErrorAction Stop
+        $recipientDetails = Get-Recipient -Identity $lookupIdentity -ErrorAction Stop
         $rows = New-Object System.Collections.Generic.List[object]
         foreach ($address in @($recipientDetails.EmailAddresses)) {
             if ($null -eq $address) { continue }
@@ -199,7 +220,7 @@ function Get-ProxyAddressRows {
         return @($rows)
     }
     catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ProxyAddresses' -Operation 'Get-Recipient EmailAddresses' -Message $_.Exception.Message
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ProxyAddresses' -Operation 'Get-Recipient EmailAddresses' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
         return @()
     }
 }
@@ -212,9 +233,11 @@ function Get-FullAccessRows {
         return @()
     }
 
+    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+
     try {
         return @(
-            Get-EXOMailboxPermission -Identity $Recipient.Identity -ErrorAction Stop |
+            Get-EXOMailboxPermission -Identity $lookupIdentity -ErrorAction Stop |
                 Where-Object { -not $_.IsInherited -and $_.User -notmatch '^NT AUTHORITY\\SELF$' -and ($_.AccessRights -contains 'FullAccess') } |
                 ForEach-Object {
                     [pscustomobject]@{
@@ -229,7 +252,7 @@ function Get-FullAccessRows {
         )
     }
     catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'FullAccess' -Operation 'Get-EXOMailboxPermission' -Message $_.Exception.Message
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'FullAccess' -Operation 'Get-EXOMailboxPermission' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
         return @()
     }
 }
@@ -244,9 +267,11 @@ function Test-IsSelfTrustee {
 function Get-SendAsRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
+    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+
     try {
         return @(
-            Get-RecipientPermission -Identity $Recipient.Identity -ErrorAction Stop |
+            Get-RecipientPermission -Identity $lookupIdentity -ErrorAction Stop |
                 Where-Object { -not $_.IsInherited -and -not (Test-IsSelfTrustee -Trustee ([string]$_.Trustee)) -and ($_.AccessRights -contains 'SendAs') } |
                 ForEach-Object {
                     [pscustomobject]@{
@@ -260,7 +285,7 @@ function Get-SendAsRows {
         )
     }
     catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message $_.Exception.Message
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
         return @()
     }
 }
@@ -268,9 +293,11 @@ function Get-SendAsRows {
 function Get-ExchangeGroupMembershipRows {
     param([Parameter(Mandatory = $true)] $Recipient)
 
+    $lookupIdentity = Get-ExchangeLookupIdentity -Recipient $Recipient
+
     try {
         return @(
-            Get-Recipient -Identity $Recipient.Identity -ErrorAction Stop |
+            Get-Recipient -Identity $lookupIdentity -ErrorAction Stop |
                 Select-Object -ExpandProperty MemberOfGroup -ErrorAction SilentlyContinue |
                 ForEach-Object {
                     [pscustomobject]@{
@@ -282,7 +309,7 @@ function Get-ExchangeGroupMembershipRows {
         )
     }
     catch {
-        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-Recipient MemberOfGroup' -Message $_.Exception.Message
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-Recipient MemberOfGroup' -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
         return @()
     }
 }
