@@ -180,7 +180,7 @@ function Get-ProxyAddressRows {
     $rows = New-Object System.Collections.Generic.List[object]
     foreach ($address in @($Recipient.EmailAddresses)) {
         if ($null -eq $address) { continue }
-        $value = [string]$address
+        $value = $address.ToString()
         $parts = $value -split ':', 2
         $prefix = if ($parts.Count -eq 2) { $parts[0] } else { '' }
         $addressValue = if ($parts.Count -eq 2) { $parts[1] } else { $value }
