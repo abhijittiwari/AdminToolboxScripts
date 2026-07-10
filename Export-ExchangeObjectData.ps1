@@ -413,6 +413,174 @@ function Export-ReportCsvs {
     $ErrorRows | Export-Csv -Path (Join-Path $Folder 'Errors.csv') -NoTypeInformation -Encoding UTF8
 }
 
+function ConvertTo-JsonLiteral {
+    param([Parameter(Mandatory = $false)] $Value)
+
+    return (ConvertTo-Json -InputObject @($Value) -Depth 10 -Compress)
+}
+
+function Export-DashboardHtml {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Folder,
+        [Parameter(Mandatory = $true)] [object[]]$ConsolidatedRows,
+        [Parameter(Mandatory = $true)] [object[]]$ProxyRows,
+        [Parameter(Mandatory = $true)] [object[]]$FullAccessRows,
+        [Parameter(Mandatory = $true)] [object[]]$SendAsRows,
+        [Parameter(Mandatory = $true)] [object[]]$ExchangeGroupRows,
+        [Parameter(Mandatory = $true)] [object[]]$EntraGroupRows
+    )
+
+    $objectsJson = ConvertTo-JsonLiteral -Value $ConsolidatedRows
+    $proxyJson = ConvertTo-JsonLiteral -Value $ProxyRows
+    $fullAccessJson = ConvertTo-JsonLiteral -Value $FullAccessRows
+    $sendAsJson = ConvertTo-JsonLiteral -Value $SendAsRows
+    $exchangeGroupsJson = ConvertTo-JsonLiteral -Value $ExchangeGroupRows
+    $entraGroupsJson = ConvertTo-JsonLiteral -Value $EntraGroupRows
+
+    $html = @"
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exchange Object Data Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #1f2933; background: #f7f9fb; }
+    h1 { margin-bottom: 8px; }
+    .warning { background: #fff3cd; border: 1px solid #ffe69c; padding: 12px; border-radius: 6px; margin: 12px 0; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+    input[type="search"] { padding: 8px; min-width: 320px; }
+    button { padding: 8px 10px; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; background: white; }
+    th, td { border: 1px solid #d9e2ec; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #e6f0ff; position: sticky; top: 0; }
+    details { margin-top: 6px; }
+    .muted { color: #627d98; }
+  </style>
+</head>
+<body>
+  <h1>Exchange Object Data Dashboard</h1>
+  <p class="muted">Search, select objects, and export selected data from this local static report.</p>
+  <div class="warning">This dashboard may contain sensitive proxy addresses, mailbox permissions, group memberships, and object identifiers. Handle it as sensitive administrative data.</div>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search objects, proxies, permissions, groups">
+    <button onclick="selectVisible(true)">Select visible</button>
+    <button onclick="selectVisible(false)">Clear visible</button>
+    <button onclick="exportSelected('objects')">Export selected objects</button>
+    <button onclick="exportSelected('proxies')">Export selected proxies</button>
+    <button onclick="exportSelected('fullaccess')">Export selected FullAccess</button>
+    <button onclick="exportSelected('sendas')">Export selected SendAs</button>
+    <button onclick="exportSelected('exchangegroups')">Export selected Exchange groups</button>
+    <button onclick="exportSelected('entragroups')">Export selected Entra groups</button>
+  </div>
+  <div id="summary"></div>
+  <table>
+    <thead><tr><th>Select</th><th>Object</th><th>Type</th><th>Primary SMTP</th><th>Details</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+<script>
+const objects = $objectsJson;
+const proxies = $proxyJson;
+const fullaccess = $fullAccessJson;
+const sendas = $sendAsJson;
+const exchangegroups = $exchangeGroupsJson;
+const entragroups = $entraGroupsJson;
+const selected = new Set();
+
+function textForObject(o) {
+  return Object.values(o).join(' ').toLowerCase();
+}
+
+function relatedRows(data, identity) {
+  return data.filter(r => String(r.Identity) === String(identity));
+}
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const body = document.getElementById('rows');
+  body.innerHTML = '';
+  const visible = objects.filter(o => textForObject(o).includes(q));
+  document.getElementById('summary').textContent = visible.length + ' visible of ' + objects.length + ' objects';
+  for (const o of visible) {
+    const id = String(o.Identity);
+    const tr = document.createElement('tr');
+    tr.dataset.identity = id;
+    tr.innerHTML = '<td><input type="checkbox" ' + (selected.has(id) ? 'checked' : '') + '></td>' +
+      '<td><strong>' + escapeHtml(o.DisplayName || '') + '</strong><br><span class="muted">' + escapeHtml(id) + '</span></td>' +
+      '<td>' + escapeHtml(o.RecipientTypeDetails || o.RecipientType || '') + '<br>' + escapeHtml(o.MailboxType || '') + '</td>' +
+      '<td>' + escapeHtml(o.PrimarySmtpAddress || '') + '</td>' +
+      '<td>' + detailsHtml(o) + '</td>';
+    tr.querySelector('input').addEventListener('change', event => toggleSelected(event.target, id));
+    body.appendChild(tr);
+  }
+}
+
+function detailsHtml(o) {
+  const id = String(o.Identity);
+  return section('Proxies', relatedRows(proxies, id), 'RawProxyAddress') +
+    section('FullAccess', relatedRows(fullaccess, id), 'Trustee') +
+    section('SendAs', relatedRows(sendas, id), 'Trustee') +
+    section('Exchange Groups', relatedRows(exchangegroups, id), 'GroupIdentity') +
+    section('Entra Groups', relatedRows(entragroups, id), 'GroupDisplayName');
+}
+
+function section(title, rows, field) {
+  const values = rows.map(r => r[field]).filter(Boolean).map(escapeHtml).join('<br>');
+  return '<details><summary>' + title + ' (' + rows.length + ')</summary>' + (values || '<span class="muted">None</span>') + '</details>';
+}
+
+function toggleSelected(cb, id) {
+  if (cb.checked) selected.add(id); else selected.delete(id);
+}
+
+function selectVisible(value) {
+  document.querySelectorAll('#rows tr').forEach(tr => { if (value) selected.add(tr.dataset.identity); else selected.delete(tr.dataset.identity); });
+  render();
+}
+
+function exportSelected(kind) {
+  const ids = selected;
+  let data = objects;
+  if (kind === 'proxies') data = proxies;
+  if (kind === 'fullaccess') data = fullaccess;
+  if (kind === 'sendas') data = sendas;
+  if (kind === 'exchangegroups') data = exchangegroups;
+  if (kind === 'entragroups') data = entragroups;
+  const rows = data.filter(r => ids.has(String(r.Identity)));
+  downloadCsv(kind + '-selected.csv', rows);
+}
+
+function downloadCsv(filename, rows) {
+  if (!rows.length) { alert('No selected rows to export.'); return; }
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(',')].concat(rows.map(row => headers.map(h => csvCell(row[h])).join(','))).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function csvCell(value) {
+  const s = value == null ? '' : String(value);
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('search').addEventListener('input', render);
+render();
+</script>
+</body>
+</html>
+"@
+
+    Set-Content -Path (Join-Path $Folder 'Dashboard.html') -Value $html -Encoding UTF8
+}
+
 $resolvedOutputFolder = Initialize-OutputFolder -OutputFolder $OutputFolder
 $isMultiObjectRun = $PSCmdlet.ParameterSetName -in @('All', 'Csv')
 
@@ -473,3 +641,21 @@ Export-ReportCsvs `
     -ErrorRows @($script:Errors)
 
 Write-Host "CSV exports written to: $resolvedOutputFolder" -ForegroundColor Green
+
+if ($isMultiObjectRun -and -not $NoDashboard) {
+    try {
+        Export-DashboardHtml `
+            -Folder $resolvedOutputFolder `
+            -ConsolidatedRows $consolidatedRows `
+            -ProxyRows @($proxyRows) `
+            -FullAccessRows @($fullAccessRows) `
+            -SendAsRows @($sendAsRows) `
+            -ExchangeGroupRows @($exchangeGroupMembershipRows) `
+            -EntraGroupRows @($entraGroupMembershipRows)
+        Write-Host "Dashboard written to: $(Join-Path $resolvedOutputFolder 'Dashboard.html')" -ForegroundColor Green
+    }
+    catch {
+        Add-ExportError -Identity '' -Stage 'Dashboard' -Operation 'Export-DashboardHtml' -Message $_.Exception.Message
+        @($script:Errors) | Export-Csv -Path (Join-Path $resolvedOutputFolder 'Errors.csv') -NoTypeInformation -Encoding UTF8
+    }
+}
