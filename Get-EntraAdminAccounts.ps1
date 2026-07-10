@@ -190,13 +190,16 @@ foreach ($userId in $userRoles.Keys) {
     $mfaRegistered = 'Unknown'; $mfaMethods = ''; $mfaDefault = ''
     try {
         $reg = Get-MgReportAuthenticationMethodUserRegistrationDetail `
-            -UserRegistrationDetailId $userId -ErrorAction SilentlyContinue
+            -UserRegistrationDetailsId $userId -ErrorAction Stop
         if ($reg) {
             $mfaRegistered = $reg.IsMfaRegistered
             $mfaMethods    = ($reg.MethodsRegistered -join ', ')
             $mfaDefault    = $reg.DefaultMfaMethod
         }
-    } catch { }
+    }
+    catch {
+        Write-Warning "Could not retrieve MFA registration details for $($user.UserPrincipalName): $($_.Exception.Message)"
+    }
 
     # --- Mailbox ---
     if ($exoConnected) {

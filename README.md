@@ -26,6 +26,7 @@ Reports all Entra ID user accounts with directory admin access. The report inclu
   - `AuditLog.Read.All`
   - `UserAuthenticationMethod.Read.All`
 - Optional Exchange Online mailbox lookup requires the `ExchangeOnlineManagement` module.
+- MFA registration fields are read from the Microsoft Graph authentication method user registration report.
 
 ### Parameters
 
@@ -73,6 +74,7 @@ The script exports a CSV and prints a console summary table. CSV columns include
 - Service principals are excluded from the user report.
 - Group-assigned roles are expanded to transitive user members and marked as `via group` in the `Roles` column.
 - PIM eligibility collection may warn or skip if the tenant lacks Entra ID P2 or the signed-in account lacks permission.
+- If MFA registration details cannot be retrieved for a user, the script writes a warning and leaves `MfaRegistered` as `Unknown` with blank method fields.
 - The script disconnects from Microsoft Graph and Exchange Online at the end of execution.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
