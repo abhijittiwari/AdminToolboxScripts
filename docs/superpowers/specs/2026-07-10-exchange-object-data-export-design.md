@@ -31,9 +31,21 @@ The script supports three mutually exclusive input modes:
 
 CSV input defaults to an `Identity` column. The `-IdentityColumn <name>` parameter allows callers to choose another column when needed. Identity values should be passed to Exchange recipient lookup as provided, so they may be UPNs, primary SMTP addresses, aliases, display names, GUIDs, or other Exchange-resolvable identifiers.
 
+All input modes should accept `-RecipientType`, defaulting to `Mailbox`. The parameter controls which Exchange recipient object classes are exported or retained after lookup.
+
 ## Object Scope
 
-For `-All`, the script should target all Exchange mail-enabled recipients returned by Exchange Online recipient discovery, including mailboxes, mail users, mail contacts, mail-enabled groups, distribution groups, dynamic groups, and Microsoft 365 groups when Exchange returns them.
+By default, the script exports mailboxes only. Callers can broaden or narrow the object scope with `-RecipientType`.
+
+Supported `-RecipientType` values:
+
+- `Mailbox`: user, shared, room, equipment, discovery, and other mailbox recipient types Exchange returns as mailboxes.
+- `Group`: mail-enabled security groups, distribution groups, dynamic distribution groups, and Microsoft 365 groups where Exchange returns them.
+- `MailUser`: mail users.
+- `MailContact`: mail contacts.
+- `All`: all Exchange mail-enabled recipients returned by Exchange Online recipient discovery, including mailboxes, mail users, mail contacts, mail-enabled groups, distribution groups, dynamic groups, and Microsoft 365 groups when Exchange returns them.
+
+For `-All`, recipient discovery should honor `-RecipientType`. For `-InputCsv` and `-Identity`, the script should resolve the supplied identities and then skip objects whose recipient type does not match `-RecipientType`, recording skipped objects in `Errors.csv` with a `RecipientTypeFilter` stage.
 
 The script should normalize object records into a consistent schema even when a property is missing for a recipient type.
 
@@ -207,6 +219,7 @@ Add a README section for `Export-ExchangeObjectData.ps1` covering:
 - Requirements.
 - Exchange Online and Graph permissions.
 - Input modes.
+- Recipient type filtering and the default mailbox-only behavior.
 - Output files.
 - Dashboard behavior.
 - Sensitive-data warning.
