@@ -2,6 +2,12 @@
 
 Collection of administrative scripts for Microsoft 365, Entra ID, Active Directory, and mail DNS troubleshooting.
 
+## Documentation
+
+- [Quick Start](docs/quick-start.md)
+- [Script Reference](docs/script-reference.md)
+- [Operations and Security](docs/operations-and-security.md)
+
 ## Scripts
 
 | Script | Platform | Purpose |
