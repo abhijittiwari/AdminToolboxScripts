@@ -174,11 +174,110 @@ function ConvertTo-ExportObject {
     }
 }
 
+function Get-ProxyAddressRows {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($address in @($Recipient.EmailAddresses)) {
+        if ($null -eq $address) { continue }
+        $value = [string]$address
+        $parts = $value -split ':', 2
+        $prefix = if ($parts.Count -eq 2) { $parts[0] } else { '' }
+        $addressValue = if ($parts.Count -eq 2) { $parts[1] } else { $value }
+
+        $rows.Add([pscustomobject]@{
+            Identity           = [string]$Recipient.Identity
+            PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
+            AddressType        = $prefix
+            ProxyAddress       = $addressValue
+            RawProxyAddress    = $value
+            IsPrimarySmtp      = $value.StartsWith('SMTP:')
+        }) | Out-Null
+    }
+    return @($rows)
+}
+
+function Get-FullAccessRows {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    $mailboxType = Get-MailboxType -Recipient $Recipient
+    if ([string]::IsNullOrWhiteSpace($mailboxType)) {
+        return @()
+    }
+
+    try {
+        return @(
+            Get-EXOMailboxPermission -Identity $Recipient.Identity -ErrorAction Stop |
+                Where-Object { -not $_.IsInherited -and $_.User -notmatch '^NT AUTHORITY\\SELF$' -and ($_.AccessRights -contains 'FullAccess') } |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        Identity           = [string]$Recipient.Identity
+                        PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
+                        Trustee            = [string]$_.User
+                        AccessRights       = ($_.AccessRights -join '; ')
+                        Deny               = [bool]$_.Deny
+                        IsInherited        = [bool]$_.IsInherited
+                    }
+                }
+        )
+    }
+    catch {
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'FullAccess' -Operation 'Get-EXOMailboxPermission' -Message $_.Exception.Message
+        return @()
+    }
+}
+
+function Get-SendAsRows {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    try {
+        return @(
+            Get-RecipientPermission -Identity $Recipient.Identity -ErrorAction Stop |
+                Where-Object { -not $_.IsInherited -and ($_.AccessRights -contains 'SendAs') } |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        Identity           = [string]$Recipient.Identity
+                        PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
+                        Trustee            = [string]$_.Trustee
+                        AccessRights       = ($_.AccessRights -join '; ')
+                        IsInherited        = [bool]$_.IsInherited
+                    }
+                }
+        )
+    }
+    catch {
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message $_.Exception.Message
+        return @()
+    }
+}
+
+function Get-ExchangeGroupMembershipRows {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    try {
+        return @(
+            Get-EXORecipient -Identity $Recipient.Identity -Properties MemberOfGroup -ErrorAction Stop |
+                Select-Object -ExpandProperty MemberOfGroup -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        Identity           = [string]$Recipient.Identity
+                        PrimarySmtpAddress = [string]$Recipient.PrimarySmtpAddress
+                        GroupIdentity      = [string]$_
+                    }
+                }
+        )
+    }
+    catch {
+        Add-ExportError -Identity ([string]$Recipient.Identity) -Stage 'ExchangeGroupMemberships' -Operation 'Get-EXORecipient MemberOfGroup' -Message $_.Exception.Message
+        return @()
+    }
+}
+
 function Get-TargetRecipients {
     if ($PSCmdlet.ParameterSetName -eq 'All') {
         Write-Host "Loading Exchange recipients..." -ForegroundColor Cyan
         return @(
-            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName |
+            Get-EXORecipient -ResultSize Unlimited -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses,MemberOfGroup |
                 Where-Object { Test-RecipientMatchesType -Recipient $_ -SelectedRecipientType $RecipientType }
         )
     }
@@ -188,7 +287,7 @@ function Get-TargetRecipients {
 
     foreach ($inputIdentity in $identities) {
         try {
-            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName -ErrorAction Stop
+            $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses,MemberOfGroup -ErrorAction Stop
             if (Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType $RecipientType) {
                 $recipients.Add($recipient) | Out-Null
             }
@@ -217,3 +316,20 @@ $targetRecipients = @(Get-TargetRecipients)
 $objects = @($targetRecipients | ForEach-Object { ConvertTo-ExportObject -Recipient $_ })
 
 Write-Host "Objects selected: $($objects.Count)" -ForegroundColor Green
+
+$proxyRows = New-Object System.Collections.Generic.List[object]
+$fullAccessRows = New-Object System.Collections.Generic.List[object]
+$sendAsRows = New-Object System.Collections.Generic.List[object]
+$exchangeGroupMembershipRows = New-Object System.Collections.Generic.List[object]
+
+$index = 0
+foreach ($recipient in $targetRecipients) {
+    $index++
+    Write-Progress -Activity 'Collecting Exchange object data' -Status "$index of $($targetRecipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($targetRecipients.Count, 1)) * 100)
+
+    foreach ($row in @(Get-ProxyAddressRows -Recipient $recipient)) { $proxyRows.Add($row) | Out-Null }
+    foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
+    foreach ($row in @(Get-SendAsRows -Recipient $recipient)) { $sendAsRows.Add($row) | Out-Null }
+    foreach ($row in @(Get-ExchangeGroupMembershipRows -Recipient $recipient)) { $exchangeGroupMembershipRows.Add($row) | Out-Null }
+}
+Write-Progress -Activity 'Collecting Exchange object data' -Completed
