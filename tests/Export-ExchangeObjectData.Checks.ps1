@@ -278,6 +278,25 @@ function Test-Consolidation {
 }
 Test-Consolidation
 
+function Test-RecipientTypeMatrix {
+    # Every mailbox flavor must pass the Mailbox filter and keep its type in MailboxType.
+    $mailboxDetails = @('UserMailbox', 'SharedMailbox', 'RoomMailbox', 'EquipmentMailbox', 'SchedulingMailbox', 'LinkedMailbox', 'LinkedRoomMailbox', 'TeamMailbox', 'DiscoveryMailbox', 'LegacyMailbox')
+    foreach ($details in $mailboxDetails) {
+        $recipient = [pscustomobject]@{ RecipientTypeDetails = $details; RecipientType = 'UserMailbox' }
+        Assert-True -Condition ((Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType 'Mailbox') -and (Get-MailboxType -Recipient $recipient) -eq $details) -Name "Test-RecipientMatchesType accepts $details as Mailbox with MailboxType preserved"
+    }
+
+    $groupMailbox = [pscustomobject]@{ RecipientTypeDetails = 'GroupMailbox'; RecipientType = 'MailUniversalDistributionGroup' }
+    Assert-True -Condition (-not (Test-RecipientMatchesType -Recipient $groupMailbox -SelectedRecipientType 'Mailbox')) -Name 'Test-RecipientMatchesType classifies GroupMailbox as Group, not Mailbox'
+    Assert-True -Condition (Test-RecipientMatchesType -Recipient $groupMailbox -SelectedRecipientType 'Group') -Name 'Test-RecipientMatchesType accepts GroupMailbox as Group'
+
+    # Room lists are distribution groups whose RecipientTypeDetails does not end in Group.
+    $roomList = [pscustomobject]@{ RecipientTypeDetails = 'RoomList'; RecipientType = 'MailUniversalDistributionGroup' }
+    Assert-True -Condition (-not (Test-RecipientMatchesType -Recipient $roomList -SelectedRecipientType 'Mailbox')) -Name 'Test-RecipientMatchesType rejects RoomList as Mailbox'
+    Assert-True -Condition (Test-RecipientMatchesType -Recipient $roomList -SelectedRecipientType 'Group') -Name 'Test-RecipientMatchesType accepts RoomList as Group'
+}
+Test-RecipientTypeMatrix
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

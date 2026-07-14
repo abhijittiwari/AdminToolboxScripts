@@ -124,7 +124,8 @@ function Test-RecipientMatchesType {
             return ($typeDetails -ne 'GroupMailbox' -and ($typeDetails -match 'Mailbox$' -or $type -eq 'UserMailbox'))
         }
         'Group' {
-            return ($typeDetails -eq 'GroupMailbox' -or $typeDetails -match 'Group$' -or $typeDetails -match 'DistributionGroup' -or $typeDetails -eq 'MailUniversalSecurityGroup')
+            # $type catches group recipients whose details do not end in Group, e.g. RoomList.
+            return ($typeDetails -eq 'GroupMailbox' -or $typeDetails -match 'Group$' -or $typeDetails -match 'DistributionGroup' -or $type -match 'Group')
         }
         'MailUser' {
             return ($typeDetails -eq 'MailUser' -or $type -eq 'MailUser')

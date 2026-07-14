@@ -78,6 +78,18 @@ function Test-RecipientTypeMatching {
     Assert-True -Condition (Test-RecipientMatchesType -Recipient $mailUser -SelectedRecipientType 'MailUser') -Name 'Test-RecipientMatchesType accepts MailUser'
     Assert-True -Condition (Test-RecipientMatchesType -Recipient $mailContact -SelectedRecipientType 'MailContact') -Name 'Test-RecipientMatchesType accepts MailContact'
     Assert-True -Condition (Test-RecipientMatchesType -Recipient $mailContact -SelectedRecipientType 'All') -Name 'Test-RecipientMatchesType accepts anything for All'
+
+    # Every mailbox flavor must pass the Mailbox filter and keep its type in MailboxType.
+    $mailboxDetails = @('UserMailbox', 'SharedMailbox', 'RoomMailbox', 'EquipmentMailbox', 'SchedulingMailbox', 'LinkedMailbox', 'LinkedRoomMailbox', 'TeamMailbox', 'DiscoveryMailbox', 'LegacyMailbox')
+    foreach ($details in $mailboxDetails) {
+        $recipient = [pscustomobject]@{ RecipientTypeDetails = $details; RecipientType = 'UserMailbox' }
+        Assert-True -Condition ((Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType 'Mailbox') -and (Get-MailboxType -Recipient $recipient) -eq $details) -Name "Test-RecipientMatchesType accepts $details as Mailbox with MailboxType preserved"
+    }
+
+    # Room lists are distribution groups whose RecipientTypeDetails does not end in Group.
+    $roomList = [pscustomobject]@{ RecipientTypeDetails = 'RoomList'; RecipientType = 'MailUniversalDistributionGroup' }
+    Assert-True -Condition (-not (Test-RecipientMatchesType -Recipient $roomList -SelectedRecipientType 'Mailbox')) -Name 'Test-RecipientMatchesType rejects RoomList as Mailbox'
+    Assert-True -Condition (Test-RecipientMatchesType -Recipient $roomList -SelectedRecipientType 'Group') -Name 'Test-RecipientMatchesType accepts RoomList as Group'
 }
 Test-RecipientTypeMatching
 
