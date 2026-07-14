@@ -19,6 +19,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Export-ExchangeFullAccessPermissions.ps1` | PowerShell | Modular job: exports FullAccess mailbox permissions for an `Objects.csv` inventory. |
 | `Export-ExchangeObjectDataWorkbook.ps1` | PowerShell | Collates the export CSVs into a single Excel workbook (requires ImportExcel; no Excel needed). |
 | `Invoke-ExchangeObjectDataExport.ps1` | PowerShell | Runs all five modular export jobs in sequence: inventory, memberships, SendAs, FullAccess, workbook. |
+| `Export-ExchangeMigrationReadiness.ps1` | PowerShell | Identifies mail objects blocked, risky, or unsuitable for migration due to holds, retention, licensing, or compliance constraints. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |

@@ -14,6 +14,7 @@ This directory contains user-facing documentation for the scripts in this reposi
 | --- | --- |
 | `Export-ExchangeObjectData.ps1` | Exchange Online recipient export with permissions, proxy addresses, Exchange/Entra memberships, CSVs, and dashboard. |
 | `Invoke-ExchangeObjectDataExport.ps1` | Runs the five modular export jobs in sequence and finishes with an Excel workbook. |
+| `Export-ExchangeMigrationReadiness.ps1` | Identifies mail objects blocked, risky, or unsuitable for migration due to holds, retention, licensing, or compliance constraints. |
 | `Export-ExchangeObjectInventory.ps1` | Modular job: recipient inventory (`Objects.csv`) and proxy addresses. |
 | `Export-ExchangeGroupMemberships.ps1` | Modular job: Entra/Exchange group memberships via Microsoft Graph for an `Objects.csv` inventory. |
 | `Export-ExchangeSendAsPermissions.ps1` | Modular job: SendAs permissions for an `Objects.csv` inventory. |

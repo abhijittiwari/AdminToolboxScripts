@@ -13,6 +13,7 @@ cd AdminToolboxScripts
 | --- | --- |
 | Export Exchange Online recipients, proxies, permissions, and memberships | `Export-ExchangeObjectData.ps1` |
 | Run the same export as separate jobs and collate an Excel workbook | `Invoke-ExchangeObjectDataExport.ps1` (or the individual `Export-Exchange*` job scripts) |
+| Assess migration readiness and identify blocked or risky mail objects | `Export-ExchangeMigrationReadiness.ps1` |
 | Report Entra ID admin users and role assignments | `Get-EntraAdminAccounts.ps1` |
 | Find duplicate AD mail/proxy addresses | `Find-ADDuplicateEmailProxyAddresses.ps1` |
 | Check mail DNS records on Windows | `Get-MailDnsRecords.ps1` |
