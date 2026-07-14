@@ -214,8 +214,11 @@ $resolvedOutputFolder = Initialize-OutputFolder -OutputFolder $OutputFolder
 Write-Host "Output folder: $resolvedOutputFolder" -ForegroundColor Cyan
 Write-Host "Include licensing: $IncludeLicensing" -ForegroundColor Cyan
 
-Connect-ExchangeOnlineIfNeeded
+# Graph must connect before the Exchange module loads: both bundle
+# Microsoft.Identity.Client, and the Exchange module's older copy breaks
+# Connect-MgGraph ("Method not found ... WithLogging") if it loads first.
 Connect-GraphIfNeeded
+Connect-ExchangeOnlineIfNeeded
 
 $recipients = @(Get-TargetRecipients)
 Write-Host "Objects to assess: $($recipients.Count)" -ForegroundColor Green

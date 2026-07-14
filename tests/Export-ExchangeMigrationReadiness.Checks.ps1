@@ -104,6 +104,12 @@ function Test-ScriptStaticContract {
     # output omits license properties, so the raw endpoint must be used.
     Assert-True -Condition ($scriptText -match 'licenseDetails') -Name 'Script reads license names from the Graph licenseDetails endpoint'
     Assert-True -Condition ($scriptText -match "'Licenses'") -Name 'Script exports a Licenses column'
+
+    # Graph must connect before Exchange: both modules bundle Microsoft.Identity.Client
+    # and the Exchange module's older copy breaks Connect-MgGraph if it loads first.
+    $graphCall = [regex]::Match($scriptText, '(?m)^Connect-GraphIfNeeded')
+    $exchangeCall = [regex]::Match($scriptText, '(?m)^Connect-ExchangeOnlineIfNeeded')
+    Assert-True -Condition ($graphCall.Success -and $exchangeCall.Success -and $graphCall.Index -lt $exchangeCall.Index) -Name 'Script connects to Graph before Exchange Online (MSAL assembly conflict)'
 }
 Test-ScriptStaticContract
 
