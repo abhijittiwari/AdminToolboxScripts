@@ -160,7 +160,7 @@ Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risk
 | `-Identity <value>` | Assess one Exchange-resolvable recipient. |
 | `-ObjectsCsv <path>` | Assess the objects in an `Objects.csv` inventory produced by `Export-ExchangeObjectInventory.ps1` or the monolith. |
 | `-OutputFolder <path>` | Destination folder. Defaults to the `Objects.csv` folder with `-ObjectsCsv`, otherwise a timestamped `ExchangeMigrationReadiness_<timestamp>` folder. |
-| `-IncludeLicensing` | Check license assignment via Microsoft Graph; unlicensed users are marked `Blocked`. |
+| `-IncludeLicensing` | Check license assignment via Microsoft Graph; unlicensed users are marked `Blocked` and assigned license SKU names are written to the `Licenses` column. |
 
 ### Migration Status Logic
 
@@ -189,15 +189,16 @@ Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risk
 
 | File | Contents |
 | --- | --- |
-| `MigrationReadiness.csv` | One row per assessed object: identity, display name, recipient and mailbox type, hold and retention details, licensing, `MigrationStatus`, and `BlockingReasons`. |
-| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`. |
+| `MigrationReadiness.csv` | One row per assessed object: identity, display name, recipient and mailbox type, hold and retention details, licensing, `Licenses` (semicolon-joined SKU names, for example `EMS; SPE_E5`), `MigrationStatus`, and `BlockingReasons`. |
+| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`, including `Licenses`. |
 | `Errors-MigrationReadiness.csv` | Objects that could not be assessed. Headers-only means no errors. |
 
 ### Validation Notes
 
 - Mailbox lookups fall back through `PrimarySmtpAddress`, then `ExternalDirectoryObjectId`, then the raw `Identity`, so an inventory CSV with mixed identifier formats resolves correctly.
 - Non-mailbox recipients (mail contacts, mail users, distribution groups) cannot be assessed by `Get-EXOMailbox` and are logged to `Errors-MigrationReadiness.csv`; this is expected when the input inventory includes non-mailbox objects.
-- License checks require `User.Read.All`; a failed license lookup marks the user unlicensed, so verify `Blocked` objects whose only reason is `no license`.
+- License checks require `User.Read.All`; a failed license lookup marks the user unlicensed and is logged to `Errors-MigrationReadiness.csv`, so verify `Blocked` objects whose only reason is `no license`.
+- `Licenses` contains SKU part numbers as reported by Microsoft Graph (for example `SPE_E5`, `EXCHANGESTANDARD`), not marketing display names.
 - The script reuses existing Exchange Online and Microsoft Graph sessions and leaves them open; disconnect manually when finished.
 
 ## Get-EntraAdminAccounts.ps1

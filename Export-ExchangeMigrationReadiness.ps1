@@ -125,7 +125,8 @@ function Invoke-MigrationReadinessCheck {
         [bool]$LitigationHold,
         [string]$RetentionPolicy,
         [object[]]$ComplianceHolds,
-        [bool]$Licensing
+        [bool]$Licensing,
+        [string[]]$Licenses = @()
     )
 
     $blockers = @()
@@ -167,6 +168,7 @@ function Invoke-MigrationReadinessCheck {
         RetentionPolicy    = $RetentionPolicy
         ComplianceHolds    = @($ComplianceHolds) -join '; '
         Licensing          = $Licensing
+        Licenses           = @($Licenses) -join '; '
         MigrationStatus    = $status
         BlockingReasons    = $blockers -join '; '
         HasErrors          = $false
@@ -250,24 +252,27 @@ foreach ($recipient in $recipients) {
         $complianceHolds = @($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
         $hasLicense = $true
+        $licenseNames = @()
         if ($IncludeLicensing) {
             $externalId = [string]$recipient.ExternalDirectoryObjectId
             if (-not [string]::IsNullOrWhiteSpace($externalId)) {
                 if (-not $licenseCache.ContainsKey($externalId)) {
                     try {
-                        $user = Get-MgUser -UserId $externalId -ErrorAction Stop
-                        $licenseCache[$externalId] = @($user.LicenseAssignmentStates).Count -gt 0
+                        $licenseDetails = Invoke-MgGraphRequest -Method GET -Uri "v1.0/users/$externalId/licenseDetails" -ErrorAction Stop
+                        $licenseCache[$externalId] = @(@($licenseDetails.value) | ForEach-Object { [string]$_.skuPartNumber } | Where-Object { $_ } | Sort-Object)
                     }
                     catch {
-                        $licenseCache[$externalId] = $false
+                        Add-ExportError -Identity ([string]$recipient.Identity) -Stage 'Readiness' -Operation 'Get-LicenseDetails' -Message $_.Exception.Message
+                        $licenseCache[$externalId] = @()
                     }
                 }
-                $hasLicense = $licenseCache[$externalId]
+                $licenseNames = @($licenseCache[$externalId])
+                $hasLicense = $licenseNames.Count -gt 0
             }
         }
 
         $mailboxType = [string]$mailbox.RecipientTypeDetails
-        $row = Invoke-MigrationReadinessCheck -Identity ([string]$recipient.Identity) -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense
+        $row = Invoke-MigrationReadinessCheck -Identity ([string]$recipient.Identity) -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense -Licenses $licenseNames
         $readinessRows.Add($row) | Out-Null
     }
     catch {
@@ -278,8 +283,8 @@ Write-Progress -Id 1 -Completed
 
 $blockedRows = @($readinessRows | Where-Object { $_.MigrationStatus -eq 'Blocked' })
 
-Export-CsvWithHeaders -Rows @($readinessRows) -Path (Join-Path $resolvedOutputFolder 'MigrationReadiness.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'LitigationHold', 'RetentionPolicy', 'ComplianceHolds', 'Licensing', 'MigrationStatus', 'BlockingReasons', 'HasErrors')
-Export-CsvWithHeaders -Rows $blockedRows -Path (Join-Path $resolvedOutputFolder 'BlockedObjects.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'MigrationStatus', 'BlockingReasons')
+Export-CsvWithHeaders -Rows @($readinessRows) -Path (Join-Path $resolvedOutputFolder 'MigrationReadiness.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'LitigationHold', 'RetentionPolicy', 'ComplianceHolds', 'Licensing', 'Licenses', 'MigrationStatus', 'BlockingReasons', 'HasErrors')
+Export-CsvWithHeaders -Rows $blockedRows -Path (Join-Path $resolvedOutputFolder 'BlockedObjects.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'Licenses', 'MigrationStatus', 'BlockingReasons')
 Export-CsvWithHeaders -Rows @($script:Errors) -Path (Join-Path $resolvedOutputFolder 'Errors-MigrationReadiness.csv') -Headers @('Identity', 'Stage', 'Operation', 'Message')
 
 Write-Host "Migration readiness report: $(@($readinessRows).Count) objects assessed" -ForegroundColor Green

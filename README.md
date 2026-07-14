@@ -188,7 +188,7 @@ Assesses mailboxes for migration readiness and flags objects that are blocked, r
 
 - Selection (pick one): `-All`, `-InputCsv` + `-IdentityColumn`, `-Identity`, or `-ObjectsCsv` (an `Objects.csv` inventory from `Export-ExchangeObjectInventory.ps1` or the monolith).
 - `-OutputFolder` (optional): defaults to the `Objects.csv` folder when `-ObjectsCsv` is used, otherwise a timestamped `ExchangeMigrationReadiness_<timestamp>` folder.
-- `-IncludeLicensing` (optional): checks license assignment via Microsoft Graph; unlicensed users are marked `Blocked`.
+- `-IncludeLicensing` (optional): checks license assignment via Microsoft Graph; unlicensed users are marked `Blocked` and assigned license SKU names (for example `SPE_E5`, `EXCHANGESTANDARD`) are written to the `Licenses` column.
 
 ### Usage
 
@@ -207,8 +207,8 @@ Assesses mailboxes for migration readiness and flags objects that are blocked, r
 
 | File | Contents |
 | --- | --- |
-| `MigrationReadiness.csv` | One row per assessed object with hold, retention, licensing, status, and blocking reasons. |
-| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`. |
+| `MigrationReadiness.csv` | One row per assessed object with hold, retention, licensing (including license SKU names), status, and blocking reasons. |
+| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`, including license SKU names. |
 | `Errors-MigrationReadiness.csv` | Objects that could not be assessed. Headers-only means no errors. |
 
 ### Notes

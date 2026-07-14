@@ -70,6 +70,14 @@ function Test-MigrationStatusLogic {
     # Ready when no issues.
     $row = Invoke-MigrationReadinessCheck -Identity 'user6' -DisplayName 'User Six' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true
     Assert-True -Condition ($row.MigrationStatus -eq 'Ready') -Name 'Invoke-MigrationReadinessCheck marks as Ready when no blockers'
+
+    # License names are joined into the Licenses column.
+    $row = Invoke-MigrationReadinessCheck -Identity 'user7' -DisplayName 'User Seven' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true -Licenses @('EMS', 'SPE_E5')
+    Assert-True -Condition ($row.Licenses -eq 'EMS; SPE_E5') -Name 'Invoke-MigrationReadinessCheck joins license names into Licenses column'
+
+    # Licenses column is empty when none are passed.
+    $row = Invoke-MigrationReadinessCheck -Identity 'user8' -DisplayName 'User Eight' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true
+    Assert-True -Condition ($row.Licenses -eq '') -Name 'Invoke-MigrationReadinessCheck emits empty Licenses when none provided'
 }
 Test-MigrationStatusLogic
 
@@ -91,6 +99,11 @@ function Test-ScriptStaticContract {
     $invalidRequested = @($requestedProperties | Where-Object { $_ -notin $validProperties })
     Assert-True -Condition ($invalidRequested.Count -eq 0) -Name "Script requests only valid mailbox properties (found: $($requestedProperties -join ', '))"
     Assert-True -Condition ('LitigationHoldEnabled' -in $requestedProperties) -Name 'Script requests LitigationHoldEnabled (not the invalid LitigationHold)'
+
+    # License names come from Graph licenseDetails (skuPartNumber); default Get-MgUser
+    # output omits license properties, so the raw endpoint must be used.
+    Assert-True -Condition ($scriptText -match 'licenseDetails') -Name 'Script reads license names from the Graph licenseDetails endpoint'
+    Assert-True -Condition ($scriptText -match "'Licenses'") -Name 'Script exports a Licenses column'
 }
 Test-ScriptStaticContract
 
