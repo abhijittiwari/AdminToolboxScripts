@@ -244,8 +244,8 @@ foreach ($recipient in $recipients) {
             $lookupMethod = 'Identity'
         }
 
-        $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHold, RetentionPolicy, InPlaceHolds
-        $litigationHold = [bool]$mailbox.LitigationHold
+        $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHoldEnabled, RetentionPolicy, InPlaceHolds
+        $litigationHold = [bool]$mailbox.LitigationHoldEnabled
         $retentionPolicy = [string]$mailbox.RetentionPolicy
         $complianceHolds = @($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 

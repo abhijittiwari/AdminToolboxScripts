@@ -81,6 +81,16 @@ function Test-ScriptStaticContract {
     Assert-True -Condition (($scriptText -match "ParameterSetName.*=.*'All'" -and $scriptText -match "ParameterSetName.*=.*'Csv'" -and $scriptText -match "ParameterSetName.*=.*'Identity'")) -Name 'Script supports All, Csv, and Identity parameter sets'
     Assert-True -Condition ($scriptText -match "ParameterSetName.*=.*'ObjectsCsv'") -Name 'Script supports ObjectsCsv parameter (job input)'
     Assert-True -Condition ($scriptText -match 'MigrationStatus') -Name 'Script calculates MigrationStatus (Ready/Blocked/Risky/Review)'
+
+    # Get-EXOMailbox only accepts real mailbox property names. LitigationHold,
+    # ComplianceHold, and ComplianceTagHold are not valid; LitigationHoldEnabled is.
+    $propertiesMatch = [regex]::Match($scriptText, 'Get-EXOMailbox[^\r\n]*-Properties\s+([^\r\n]+)')
+    Assert-True -Condition $propertiesMatch.Success -Name 'Script requests explicit Get-EXOMailbox properties'
+    $requestedProperties = @($propertiesMatch.Groups[1].Value -split ',' | ForEach-Object { ($_.Trim() -split '\s')[0] } | Where-Object { $_ })
+    $validProperties = @('LitigationHoldEnabled', 'RetentionPolicy', 'InPlaceHolds')
+    $invalidRequested = @($requestedProperties | Where-Object { $_ -notin $validProperties })
+    Assert-True -Condition ($invalidRequested.Count -eq 0) -Name "Script requests only valid mailbox properties (found: $($requestedProperties -join ', '))"
+    Assert-True -Condition ('LitigationHoldEnabled' -in $requestedProperties) -Name 'Script requests LitigationHoldEnabled (not the invalid LitigationHold)'
 }
 Test-ScriptStaticContract
 
