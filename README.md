@@ -20,6 +20,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Export-ExchangeObjectDataWorkbook.ps1` | PowerShell | Collates the export CSVs into a single Excel workbook (requires ImportExcel; no Excel needed). |
 | `Invoke-ExchangeObjectDataExport.ps1` | PowerShell | Runs all five modular export jobs in sequence: inventory, memberships, SendAs, FullAccess, workbook. |
 | `Export-ExchangeMigrationReadiness.ps1` | PowerShell | Identifies mail objects blocked, risky, or unsuitable for migration due to holds, retention, licensing, or compliance constraints. |
+| `Export-DomainCutoverAssessment.ps1` | PowerShell | Assesses an accepted domain ahead of a tenant-to-tenant cutover: accepted-domain config, MX/SPF/DKIM DNS, and shared mailbox domain usage with hold status. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
@@ -216,6 +217,38 @@ Assesses mailboxes for migration readiness and flags objects that are blocked, r
 - Mailbox lookups fall back through `PrimarySmtpAddress`, then `ExternalDirectoryObjectId`, then the raw `Identity`, so mixed-identifier CSVs resolve correctly.
 - Non-mailbox recipients (mail contacts, mail users, distribution groups) cannot be assessed by `Get-EXOMailbox` and are logged to the errors CSV.
 - The script reuses existing Exchange Online and Microsoft Graph sessions and leaves them open, matching the modular job scripts.
+
+## Export-DomainCutoverAssessment.ps1
+
+Assesses an accepted domain ahead of a tenant-to-tenant domain cutover. Confirms the accepted-domain configuration (live via `Get-AcceptedDomain` or from a previously exported CSV), resolves the domain's MX, SPF, Autodiscover, and DKIM records (via `Resolve-DnsName` on Windows or `dig` on macOS/Linux), and analyzes shared mailboxes from an `Objects.csv` inventory: which use the target domain as primary SMTP or alias, and which carry litigation or compliance holds. The script is read-only.
+
+### Parameters
+
+- `-Domain` (mandatory): the accepted domain to assess.
+- `-ObjectsCsv` (optional): inventory from `Export-ExchangeObjectInventory.ps1`; `ProxyAddresses.csv` and `MigrationReadiness.csv` are auto-discovered from the same folder (or passed explicitly with `-ProxyAddressesCsv` / `-MigrationReadinessCsv`).
+- `-AcceptedDomainsCsv` (optional): a previous `Get-AcceptedDomain` export, enabling fully offline runs.
+- `-SkipExchange` (optional): skip the Exchange Online connection.
+- `-OutputFolder` (optional): defaults to the `Objects.csv` folder or a timestamped folder.
+
+### Usage
+
+```powershell
+# Live tenant assessment
+./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv
+
+# Fully offline from previous exports
+./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./AcceptedDomains.csv -SkipExchange
+```
+
+### Output Files
+
+| File | Contents |
+| --- | --- |
+| `AcceptedDomains.csv` | All accepted domains with `IsTargetDomain` flag. |
+| `DnsRecords.csv` | MX, SPF, Autodiscover, and DKIM records with per-record assessments. |
+| `SharedMailboxDomainUsage.csv` | Per shared mailbox: primary/alias usage of the target domain joined with hold and readiness status. |
+| `CutoverImpactSummary.csv` | Headline metrics (domain type, MX/EOP status, third-party SPF senders, hold counts). |
+| `Errors-DomainCutover.csv` | Lookup failures. Headers-only means no errors. |
 
 ## Get-EntraAdminAccounts.ps1
 

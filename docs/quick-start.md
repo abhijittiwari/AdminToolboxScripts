@@ -14,6 +14,7 @@ cd AdminToolboxScripts
 | Export Exchange Online recipients, proxies, permissions, and memberships | `Export-ExchangeObjectData.ps1` |
 | Run the same export as separate jobs and collate an Excel workbook | `Invoke-ExchangeObjectDataExport.ps1` (or the individual `Export-Exchange*` job scripts) |
 | Assess migration readiness and identify blocked or risky mail objects | `Export-ExchangeMigrationReadiness.ps1` |
+| Assess an accepted domain before a tenant-to-tenant cutover | `Export-DomainCutoverAssessment.ps1` |
 | Report Entra ID admin users and role assignments | `Get-EntraAdminAccounts.ps1` |
 | Find duplicate AD mail/proxy addresses | `Find-ADDuplicateEmailProxyAddresses.ps1` |
 | Check mail DNS records on Windows | `Get-MailDnsRecords.ps1` |
@@ -32,6 +33,7 @@ Install only the modules needed for the script you plan to run.
 | `Export-ExchangeObjectData.ps1` | `ExchangeOnlineManagement`; Microsoft Graph modules unless `-SkipGraph` is used. |
 | `Invoke-ExchangeObjectDataExport.ps1` and the modular export jobs | `ExchangeOnlineManagement`; `Microsoft.Graph.Authentication`; `ImportExcel` for the workbook step. |
 | `Export-ExchangeMigrationReadiness.ps1` | `ExchangeOnlineManagement`; `Microsoft.Graph.Authentication` only when using `-IncludeLicensing`. |
+| `Export-DomainCutoverAssessment.ps1` | `ExchangeOnlineManagement` unless `-SkipExchange`/`-AcceptedDomainsCsv`; `Resolve-DnsName` or `dig` for DNS. |
 | `Get-EntraAdminAccounts.ps1` | Microsoft Graph modules; `ExchangeOnlineManagement` only when using `-IncludeMailbox`. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | RSAT Active Directory PowerShell module on Windows. |
 | `Get-MailDnsRecords.ps1` | Windows `DnsClient` module with `Resolve-DnsName`. |

@@ -129,17 +129,24 @@ function Invoke-MigrationReadinessCheck {
         [string[]]$Licenses = @()
     )
 
+    # An empty pipeline binds as $null, which @() would wrap into a one-element
+    # array; drop null/blank entries so no-hold mailboxes are not flagged.
+    $ComplianceHolds = @($ComplianceHolds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+
     $blockers = @()
     $status = 'Ready'
+    $hasHold = $false
 
     if ($LitigationHold) {
         $blockers += 'litigation hold'
         $status = 'Blocked'
+        $hasHold = $true
     }
 
-    if (@($ComplianceHolds).Count -gt 0) {
-        $blockers += "compliance hold ($(@($ComplianceHolds) -join ', '))"
+    if ($ComplianceHolds.Count -gt 0) {
+        $blockers += "compliance hold ($($ComplianceHolds -join ', '))"
         $status = 'Blocked'
+        $hasHold = $true
     }
 
     if ($status -ne 'Blocked' -and -not [string]::IsNullOrWhiteSpace($RetentionPolicy)) {
@@ -147,9 +154,17 @@ function Invoke-MigrationReadinessCheck {
         $status = 'Risky'
     }
 
+    # Shared and resource mailboxes do not require a license, so a missing
+    # license only blocks them when a hold demands one (Exchange Online Plan 2).
+    $licenseRequired = $MailboxType -notin @('SharedMailbox', 'RoomMailbox', 'EquipmentMailbox', 'SchedulingMailbox')
     if (-not $Licensing) {
-        $blockers += 'no license'
-        $status = 'Blocked'
+        if ($licenseRequired) {
+            $blockers += 'no license'
+            $status = 'Blocked'
+        }
+        elseif ($hasHold) {
+            $blockers += 'hold requires Exchange Online Plan 2 license'
+        }
     }
 
     if ($status -ne 'Blocked' -and -not [string]::IsNullOrWhiteSpace($MailboxType)) {
@@ -252,7 +267,7 @@ foreach ($recipient in $recipients) {
         $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHoldEnabled, RetentionPolicy, InPlaceHolds
         $litigationHold = [bool]$mailbox.LitigationHoldEnabled
         $retentionPolicy = [string]$mailbox.RetentionPolicy
-        $complianceHolds = @($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $complianceHolds = @(@($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
         $hasLicense = $true
         $licenseNames = @()

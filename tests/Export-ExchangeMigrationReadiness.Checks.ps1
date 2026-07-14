@@ -78,6 +78,26 @@ function Test-MigrationStatusLogic {
     # Licenses column is empty when none are passed.
     $row = Invoke-MigrationReadinessCheck -Identity 'user8' -DisplayName 'User Eight' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true
     Assert-True -Condition ($row.Licenses -eq '') -Name 'Invoke-MigrationReadinessCheck emits empty Licenses when none provided'
+
+    # A $null ComplianceHolds value (empty pipeline result) must not count as a hold.
+    $row = Invoke-MigrationReadinessCheck -Identity 'user9' -DisplayName 'User Nine' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds $null -Licensing $true
+    Assert-True -Condition ($row.MigrationStatus -eq 'Ready' -and $row.BlockingReasons -notmatch 'compliance hold') -Name 'Invoke-MigrationReadinessCheck ignores null ComplianceHolds'
+
+    # Blank hold entries must not count as a hold.
+    $row = Invoke-MigrationReadinessCheck -Identity 'user10' -DisplayName 'User Ten' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @('', $null, '  ') -Licensing $true
+    Assert-True -Condition ($row.MigrationStatus -eq 'Ready') -Name 'Invoke-MigrationReadinessCheck ignores blank compliance hold entries'
+
+    # Shared mailboxes do not require a license.
+    $row = Invoke-MigrationReadinessCheck -Identity 'shared1' -DisplayName 'Shared One' -RecipientType 'UserMailbox' -MailboxType 'SharedMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $false
+    Assert-True -Condition ($row.MigrationStatus -eq 'Ready' -and $row.BlockingReasons -notmatch 'no license') -Name 'Invoke-MigrationReadinessCheck does not block unlicensed shared mailboxes'
+
+    # But an unlicensed shared mailbox with a hold needs Exchange Online Plan 2.
+    $row = Invoke-MigrationReadinessCheck -Identity 'shared2' -DisplayName 'Shared Two' -RecipientType 'UserMailbox' -MailboxType 'SharedMailbox' -LitigationHold $true -RetentionPolicy $null -ComplianceHolds @() -Licensing $false
+    Assert-True -Condition ($row.MigrationStatus -eq 'Blocked' -and $row.BlockingReasons -match 'Plan 2') -Name 'Invoke-MigrationReadinessCheck flags unlicensed shared mailbox with hold'
+
+    # User mailboxes still block on missing license.
+    $row = Invoke-MigrationReadinessCheck -Identity 'user11' -DisplayName 'User Eleven' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $false
+    Assert-True -Condition ($row.MigrationStatus -eq 'Blocked' -and $row.BlockingReasons -match 'no license') -Name 'Invoke-MigrationReadinessCheck still blocks unlicensed user mailboxes'
 }
 Test-MigrationStatusLogic
 

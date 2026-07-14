@@ -201,6 +201,61 @@ Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risk
 - `Licenses` contains SKU part numbers as reported by Microsoft Graph (for example `SPE_E5`, `EXCHANGESTANDARD`), not marketing display names.
 - The script reuses existing Exchange Online and Microsoft Graph sessions and leaves them open; disconnect manually when finished.
 
+## Export-DomainCutoverAssessment.ps1
+
+Assesses an accepted domain ahead of a tenant-to-tenant domain cutover: accepted-domain configuration, MX/SPF/Autodiscover/DKIM DNS records, and shared mailbox usage of the domain joined with hold status. The script is read-only.
+
+### Common Uses
+
+- Confirm whether a domain is authoritative and the tenant default before planning its removal.
+- Identify third-party SPF senders and tenant-specific DKIM CNAMEs that a cutover must preserve or re-create.
+- Enumerate which shared mailboxes use the domain as primary SMTP or alias.
+- Surface litigation/compliance holds that pin mailboxes to the source tenant.
+
+### Requirements
+
+- PowerShell 7 on Windows, macOS, or Linux.
+- `ExchangeOnlineManagement` module unless `-SkipExchange` or `-AcceptedDomainsCsv` is used.
+- DNS lookups use `Resolve-DnsName` when available, otherwise `dig`.
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `-Domain <name>` | The accepted domain to assess. Mandatory. |
+| `-ObjectsCsv <path>` | `Objects.csv` inventory for the shared mailbox analysis. |
+| `-ProxyAddressesCsv <path>` | Proxy export; auto-discovered next to `Objects.csv` when omitted. |
+| `-MigrationReadinessCsv <path>` | Readiness export for hold joins; auto-discovered next to `Objects.csv` when omitted. |
+| `-AcceptedDomainsCsv <path>` | A previous `Get-AcceptedDomain` export, enabling offline runs. |
+| `-SkipExchange` | Do not connect to Exchange Online. |
+| `-OutputFolder <path>` | Defaults to the `Objects.csv` folder, otherwise a timestamped folder. |
+
+### Examples
+
+```powershell
+./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv
+```
+
+```powershell
+./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./AcceptedDomains.csv -SkipExchange
+```
+
+### Output Files
+
+| File | Contents |
+| --- | --- |
+| `AcceptedDomains.csv` | All accepted domains with an `IsTargetDomain` flag. |
+| `DnsRecords.csv` | MX, SPF, Autodiscover, and DKIM records, each with an assessment (EOP routing, third-party senders, tenant-bound DKIM). |
+| `SharedMailboxDomainUsage.csv` | One row per shared mailbox: primary domain, target-domain aliases, other aliases, hold and readiness status. |
+| `CutoverImpactSummary.csv` | Metric/value pairs: domain type, default flag, MX/EOP status, SPF third parties, shared mailbox and hold counts. |
+| `Errors-DomainCutover.csv` | Lookup failures. Headers-only means no errors. |
+
+### Validation Notes
+
+- The EOP MX hostname (`<domain>-<tld>.mail.protection.outlook.com`) is derived from the domain name and does not change when the domain moves tenants; routing follows domain verification.
+- DKIM CNAME targets contain the tenant's onmicrosoft.com namespace and must be re-created in the target tenant after cutover.
+- Hold columns are only populated when a `MigrationReadiness.csv` is available; re-run the readiness script first for current hold data.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports Entra ID user accounts with directory administrator access.
