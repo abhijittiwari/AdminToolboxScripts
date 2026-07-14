@@ -267,7 +267,7 @@ foreach ($recipient in $recipients) {
         }
 
         $mailboxType = [string]$mailbox.RecipientTypeDetails
-        $row = Invoke-MigrationReadinessCheck -Identity $identity -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense
+        $row = Invoke-MigrationReadinessCheck -Identity ([string]$recipient.Identity) -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense
         $readinessRows.Add($row) | Out-Null
     }
     catch {
