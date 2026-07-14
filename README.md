@@ -14,6 +14,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | --- | --- | --- |
 | `Export-ExchangeObjectData.ps1` | PowerShell | Exports Exchange Online recipient proxies, permissions, Exchange/Entra group memberships, CSV reports, and a searchable HTML dashboard. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
+| `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
@@ -166,6 +167,43 @@ The script exports a CSV and prints a console summary table. CSV columns include
 - PIM eligibility collection may warn or skip if the tenant lacks Entra ID P2 or the signed-in account lacks permission.
 - If MFA registration details cannot be retrieved for a user, the script writes a warning and leaves `MfaRegistered` as `Unknown` with blank method fields.
 - The script disconnects from Microsoft Graph and Exchange Online at the end of execution.
+
+## Get-CrossTenantAdminRoleAssignments.ps1
+
+Exports WAE and Fortescue admin account details from Microsoft Graph using a mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN` columns. The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK: `Install-Module Microsoft.Graph`.
+- Recommended Entra role: Global Reader or equivalent in each tenant.
+- Microsoft Graph permissions:
+  - `Directory.Read.All`
+  - `RoleManagement.Read.Directory`
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-InputCsv` | String | Admin mapping CSV path. Defaults to `./Admin.csv`. |
+| `-OutputPath` | String | Combined CSV output path. Defaults to `./CrossTenantAdminRoles_yyyyMMdd_HHmmss.csv`. |
+
+### Usage
+
+```powershell
+./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv
+```
+
+```powershell
+./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv -OutputPath ./WAE-Fortescue-AdminRoles.csv
+```
+
+### Notes
+
+- The script connects to Microsoft Graph once for WAE and once for Fortescue; sign into the requested tenant at each prompt.
+- Exchange Online RBAC roles are not included.
+- If PIM eligibility cannot be read, active roles are still exported and the PIM warning is included in the `Error` column.
+- Missing users are exported with `LookupStatus=NotFound`.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 

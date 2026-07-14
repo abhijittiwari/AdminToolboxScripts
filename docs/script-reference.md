@@ -122,6 +122,51 @@ Writes a CSV to `-OutputPath` and prints a console summary. The CSV includes adm
 - Spot-check role membership against Entra admin center.
 - Treat MFA fields as `Unknown` when registration lookup fails for a user.
 
+## Get-CrossTenantAdminRoleAssignments.ps1
+
+Uses a WAE/Fortescue admin mapping CSV to export matching admin account role and license details from both tenants.
+
+### Common Uses
+
+- Compare WAE and Fortescue admin accounts by shared `Prefix`.
+- Review Entra ID active directory role assignments.
+- Review PIM-eligible directory role assignments when permissions and licensing allow it.
+- Export immutable IDs, actual UPNs, display names, and assigned license SKU part numbers.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK.
+- Recommended role: Global Reader or equivalent in both tenants.
+- Graph permissions: `Directory.Read.All` and `RoleManagement.Read.Directory`.
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `-InputCsv <path>` | Admin mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN`. Defaults to `./Admin.csv`. |
+| `-OutputPath <path>` | Destination CSV. Defaults to `./CrossTenantAdminRoles_yyyyMMdd_HHmmss.csv`. |
+
+### Examples
+
+```powershell
+./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv
+```
+
+```powershell
+./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv -OutputPath ./WAE-Fortescue-AdminRoles.csv
+```
+
+### Output
+
+Writes one combined CSV with one row per mapped account per environment. Columns include environment, prefix, input UPN, actual UPN, display name, immutable ID, active roles, PIM-eligible roles, all roles, assigned license SKU part numbers, lookup status, and error text.
+
+### Validation Notes
+
+- Spot-check role assignments against the Entra admin center.
+- Check `Error` for PIM eligibility warnings or license lookup failures.
+- Confirm expected missing users appear with `LookupStatus=NotFound`.
+
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
 Finds duplicate mail-related values across on-prem Active Directory objects.
