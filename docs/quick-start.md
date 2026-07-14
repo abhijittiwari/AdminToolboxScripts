@@ -31,6 +31,7 @@ Install only the modules needed for the script you plan to run.
 | --- | --- |
 | `Export-ExchangeObjectData.ps1` | `ExchangeOnlineManagement`; Microsoft Graph modules unless `-SkipGraph` is used. |
 | `Invoke-ExchangeObjectDataExport.ps1` and the modular export jobs | `ExchangeOnlineManagement`; `Microsoft.Graph.Authentication`; `ImportExcel` for the workbook step. |
+| `Export-ExchangeMigrationReadiness.ps1` | `ExchangeOnlineManagement`; `Microsoft.Graph.Authentication` only when using `-IncludeLicensing`. |
 | `Get-EntraAdminAccounts.ps1` | Microsoft Graph modules; `ExchangeOnlineManagement` only when using `-IncludeMailbox`. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | RSAT Active Directory PowerShell module on Windows. |
 | `Get-MailDnsRecords.ps1` | Windows `DnsClient` module with `Resolve-DnsName`. |
@@ -64,6 +65,12 @@ On macOS, `dig` is included by default. On many Linux distributions, install the
 
 ```powershell
 ./Invoke-ExchangeObjectDataExport.ps1 -All -OutputFolder ./export
+```
+
+### Migration Readiness Assessment
+
+```powershell
+./Export-ExchangeMigrationReadiness.ps1 -ObjectsCsv ./export/Objects.csv -IncludeLicensing
 ```
 
 ### Entra Admin Account Report

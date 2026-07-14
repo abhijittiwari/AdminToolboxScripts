@@ -166,6 +166,57 @@ The workbook contains a `Summary` sheet (row counts per dataset), a `Consolidate
 - Recoverable per-object failures are logged to the job's errors CSV and the run continues, matching the monolith.
 - The export CSVs and workbook may contain sensitive proxy addresses, mailbox permissions, group memberships, and object identifiers. Handle them as sensitive administrative data.
 
+## Export-ExchangeMigrationReadiness.ps1
+
+Assesses mailboxes for migration readiness and flags objects that are blocked, risky, or need review because of holds, retention, licensing, or mailbox type. The script is read-only.
+
+### Migration Status Logic
+
+| Status | Triggered By |
+| --- | --- |
+| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned. |
+| `Risky` | A retention policy is assigned. |
+| `Review` | Uncommon mailbox type: `DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, or `LinkedRoomMailbox`. |
+| `Ready` | None of the above. |
+
+### Requirements
+
+- ExchangeOnlineManagement module.
+- Microsoft.Graph.Authentication module only when `-IncludeLicensing` is used (delegated `User.Read.All`).
+
+### Parameters
+
+- Selection (pick one): `-All`, `-InputCsv` + `-IdentityColumn`, `-Identity`, or `-ObjectsCsv` (an `Objects.csv` inventory from `Export-ExchangeObjectInventory.ps1` or the monolith).
+- `-OutputFolder` (optional): defaults to the `Objects.csv` folder when `-ObjectsCsv` is used, otherwise a timestamped `ExchangeMigrationReadiness_<timestamp>` folder.
+- `-IncludeLicensing` (optional): checks license assignment via Microsoft Graph; unlicensed users are marked `Blocked`.
+
+### Usage
+
+```powershell
+# Assess every recipient in the tenant
+./Export-ExchangeMigrationReadiness.ps1 -All
+
+# Assess the objects from a previous modular export, including licensing
+./Export-ExchangeMigrationReadiness.ps1 -ObjectsCsv ./export/Objects.csv -IncludeLicensing
+
+# Assess a single mailbox
+./Export-ExchangeMigrationReadiness.ps1 -Identity user@contoso.com
+```
+
+### Output Files
+
+| File | Contents |
+| --- | --- |
+| `MigrationReadiness.csv` | One row per assessed object with hold, retention, licensing, status, and blocking reasons. |
+| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`. |
+| `Errors-MigrationReadiness.csv` | Objects that could not be assessed. Headers-only means no errors. |
+
+### Notes
+
+- Mailbox lookups fall back through `PrimarySmtpAddress`, then `ExternalDirectoryObjectId`, then the raw `Identity`, so mixed-identifier CSVs resolve correctly.
+- Non-mailbox recipients (mail contacts, mail users, distribution groups) cannot be assessed by `Get-EXOMailbox` and are logged to the errors CSV.
+- The script reuses existing Exchange Online and Microsoft Graph sessions and leaves them open, matching the modular job scripts.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports all Entra ID user accounts with directory admin access. The report includes active role assignments, PIM-eligible role assignments, role-assignable group membership expansion, license details, MFA registration, mailbox information, group memberships, account status, created date, and last sign-in activity.

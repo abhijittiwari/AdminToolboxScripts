@@ -132,6 +132,74 @@ The workbook contains a `Summary` sheet (row counts per dataset), a `Consolidate
 - The orchestrator aborts if the inventory fails; later job failures are warnings, the workbook is still built, and the exit code is 1 with the failed jobs named.
 - The workbook script refuses to overwrite an existing `.xlsx` without `-Force` and rebuilds the file from scratch so stale sheets never survive.
 
+## Export-ExchangeMigrationReadiness.ps1
+
+Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risky`, `Review`, or `Blocked` based on litigation hold, in-place/compliance holds, retention policy, mailbox type, and (optionally) license assignment. The script is read-only.
+
+### Common Uses
+
+- Identify mailboxes blocked from migration by litigation or compliance holds.
+- Flag mailboxes with retention policies for pre-migration review.
+- Surface uncommon mailbox types (discovery, legacy, linked) that need manual handling.
+- Verify license assignment before migration with `-IncludeLicensing`.
+
+### Requirements
+
+- PowerShell.
+- `ExchangeOnlineManagement` module.
+- `Microsoft.Graph.Authentication` module only when `-IncludeLicensing` is used, with delegated `User.Read.All`.
+- Exchange Online read access for recipients and mailboxes.
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `-All` | Assess all recipients in the tenant. |
+| `-InputCsv <path>` | Assess identities listed in a CSV. |
+| `-IdentityColumn <name>` | CSV column containing identities. Defaults to `Identity`. |
+| `-Identity <value>` | Assess one Exchange-resolvable recipient. |
+| `-ObjectsCsv <path>` | Assess the objects in an `Objects.csv` inventory produced by `Export-ExchangeObjectInventory.ps1` or the monolith. |
+| `-OutputFolder <path>` | Destination folder. Defaults to the `Objects.csv` folder with `-ObjectsCsv`, otherwise a timestamped `ExchangeMigrationReadiness_<timestamp>` folder. |
+| `-IncludeLicensing` | Check license assignment via Microsoft Graph; unlicensed users are marked `Blocked`. |
+
+### Migration Status Logic
+
+| Status | Triggered By |
+| --- | --- |
+| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned. |
+| `Risky` | A retention policy is assigned (and nothing blocks the mailbox). |
+| `Review` | Mailbox type is `DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, or `LinkedRoomMailbox`. |
+| `Ready` | None of the above. |
+
+### Examples
+
+```powershell
+./Export-ExchangeMigrationReadiness.ps1 -All
+```
+
+```powershell
+./Export-ExchangeMigrationReadiness.ps1 -ObjectsCsv ./export/Objects.csv -IncludeLicensing
+```
+
+```powershell
+./Export-ExchangeMigrationReadiness.ps1 -InputCsv ./mailboxes.csv -IdentityColumn PrimarySmtpAddress
+```
+
+### Output Files
+
+| File | Contents |
+| --- | --- |
+| `MigrationReadiness.csv` | One row per assessed object: identity, display name, recipient and mailbox type, hold and retention details, licensing, `MigrationStatus`, and `BlockingReasons`. |
+| `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`. |
+| `Errors-MigrationReadiness.csv` | Objects that could not be assessed. Headers-only means no errors. |
+
+### Validation Notes
+
+- Mailbox lookups fall back through `PrimarySmtpAddress`, then `ExternalDirectoryObjectId`, then the raw `Identity`, so an inventory CSV with mixed identifier formats resolves correctly.
+- Non-mailbox recipients (mail contacts, mail users, distribution groups) cannot be assessed by `Get-EXOMailbox` and are logged to `Errors-MigrationReadiness.csv`; this is expected when the input inventory includes non-mailbox objects.
+- License checks require `User.Read.All`; a failed license lookup marks the user unlicensed, so verify `Blocked` objects whose only reason is `no license`.
+- The script reuses existing Exchange Online and Microsoft Graph sessions and leaves them open; disconnect manually when finished.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports Entra ID user accounts with directory administrator access.
