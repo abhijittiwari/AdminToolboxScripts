@@ -134,29 +134,46 @@ function Test-InvokeGraphBatch {
 Test-InvokeGraphBatch
 
 function Test-GetMembershipRows {
+    $script:MembershipUrls = [System.Collections.Generic.List[string]]::new()
     $recipients = @(
-        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; ExternalDirectoryObjectId = 'aaaaaaaa-0000-0000-0000-000000000001' },
+        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; ExternalDirectoryObjectId = 'aaaaaaaa-0000-0000-0000-000000000001'; RecipientTypeDetails = 'UserMailbox'; RecipientType = 'UserMailbox' },
+        [pscustomobject]@{ Identity = 'Sales Team'; PrimarySmtpAddress = 'salesteam@contoso.com'; ExternalDirectoryObjectId = 'aaaaaaaa-0000-0000-0000-000000000002'; RecipientTypeDetails = 'GroupMailbox'; RecipientType = 'MailUniversalDistributionGroup' },
+        [pscustomobject]@{ Identity = 'Ext Contact'; PrimarySmtpAddress = 'ext@fabrikam.com'; ExternalDirectoryObjectId = 'aaaaaaaa-0000-0000-0000-000000000003'; RecipientTypeDetails = 'MailContact'; RecipientType = 'MailContact' },
         [pscustomobject]@{ Identity = 'No Entra'; PrimarySmtpAddress = 'x@contoso.com'; ExternalDirectoryObjectId = '' }
     )
     $mock = {
         param($Method, $Uri, $Body)
         if ($Method -eq 'POST') {
             return @{ responses = @($Body.requests | ForEach-Object {
-                @{ id = $_.id; status = 200; body = @{
-                    value = @(
-                        @{ id = 'g1'; displayName = 'Sales DL'; mail = 'sales@contoso.com'; mailEnabled = $true; securityEnabled = $false },
-                        @{ id = 'g2'; displayName = 'Sec Only'; mail = $null; mailEnabled = $false; securityEnabled = $true }
-                    )
-                    '@odata.nextLink' = 'https://graph.microsoft.com/v1.0/page2'
-                } }
+                $script:MembershipUrls.Add([string]$_.url) | Out-Null
+                if ($_.id -ne 'aaaaaaaa-0000-0000-0000-000000000001') {
+                    @{ id = $_.id; status = 200; body = @{ value = @() } }
+                }
+                else {
+                    @{ id = $_.id; status = 200; body = @{
+                        value = @(
+                            @{ '@odata.type' = '#microsoft.graph.group'; id = 'g1'; displayName = 'Sales DL'; mail = 'sales@contoso.com'; mailEnabled = $true; securityEnabled = $false },
+                            @{ '@odata.type' = '#microsoft.graph.group'; id = 'g2'; displayName = 'Sec Only'; mail = $null; mailEnabled = $false; securityEnabled = $true },
+                            @{ '@odata.type' = '#microsoft.graph.directoryRole'; id = 'r1'; displayName = 'Role'; mail = $null; mailEnabled = $false; securityEnabled = $false }
+                        )
+                        '@odata.nextLink' = 'https://graph.microsoft.com/v1.0/page2'
+                    } }
+                }
             }) }
         }
         # nextLink page fetch
-        return @{ value = @(@{ id = 'g3'; displayName = 'Second Page DL'; mail = 'p2@contoso.com'; mailEnabled = $true; securityEnabled = $false }) }
+        return @{ value = @(@{ '@odata.type' = '#microsoft.graph.group'; id = 'g3'; displayName = 'Second Page DL'; mail = 'p2@contoso.com'; mailEnabled = $true; securityEnabled = $false }) }
     }
     $result = Get-MembershipRows -Recipients $recipients -GraphRequest $mock 3>$null
     $entra = @($result.Entra)
     $exchange = @($result.Exchange)
+    # directoryObject has no memberOf navigation in Graph v1.0 metadata; requests must address
+    # the concrete resource type or every batch item fails with 400.
+    Assert-True -Condition (@($script:MembershipUrls | Where-Object { $_ -match '/directoryObjects/' }).Count -eq 0) -Name 'Get-MembershipRows never uses the invalid directoryObjects memberOf path'
+    Assert-True -Condition ($script:MembershipUrls[0] -match '^/users/aaaaaaaa-0000-0000-0000-000000000001/memberOf\?') -Name 'Get-MembershipRows queries mailboxes via /users memberOf'
+    Assert-True -Condition ($script:MembershipUrls[1] -match '^/groups/aaaaaaaa-0000-0000-0000-000000000002/memberOf\?') -Name 'Get-MembershipRows queries group recipients via /groups memberOf'
+    Assert-True -Condition ($script:MembershipUrls[2] -match '^/contacts/aaaaaaaa-0000-0000-0000-000000000003/memberOf\?') -Name 'Get-MembershipRows queries mail contacts via /contacts memberOf'
+    Assert-True -Condition ($script:MembershipUrls[0] -notmatch '/memberOf/microsoft\.graph\.group') -Name 'Get-MembershipRows avoids Graph memberOf OData cast'
     Assert-True -Condition ($entra.Count -eq 3) -Name 'Get-MembershipRows returns all groups as Entra rows'
     Assert-True -Condition ($exchange.Count -eq 2) -Name 'Get-MembershipRows filters mailEnabled groups into Exchange rows'
     Assert-True -Condition ($exchange[0].GroupIdentity -eq 'Sales DL (sales@contoso.com)') -Name 'Get-MembershipRows formats GroupIdentity with mail'
@@ -175,32 +192,41 @@ Test-OldMembershipFunctionsRemoved
 
 function Test-SendAsAndFullAccess {
     $recipients = @(
-        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; Guid = [guid]'22222222-2222-2222-2222-222222222222'; RecipientTypeDetails = 'UserMailbox'; RecipientType = 'UserMailbox' }
+        [pscustomobject]@{ Identity = 'Jane Doe'; PrimarySmtpAddress = 'jane@contoso.com'; Guid = [guid]'22222222-2222-2222-2222-222222222222'; RecipientTypeDetails = 'UserMailbox'; RecipientType = 'UserMailbox' },
+        [pscustomobject]@{ Identity = 'No SendAs'; PrimarySmtpAddress = 'nosendas@contoso.com'; Guid = [guid]'33333333-3333-3333-3333-333333333333'; RecipientTypeDetails = 'UserMailbox'; RecipientType = 'UserMailbox' }
     )
 
-    # Org-wide mode: mock returns rows for an in-scope recipient, an out-of-scope one, and a SELF trustee.
-    function Get-RecipientPermission {
+    # Org-wide mode should avoid the EXO REST proxy's no-identity path on PowerShell 7/macOS.
+    $script:ExoSendAsLookups = [System.Collections.Generic.List[string]]::new()
+    function Get-EXORecipientPermission {
         param($Identity, $ResultSize, $ErrorAction)
-        @(
+        if ([string]::IsNullOrWhiteSpace([string]$Identity)) { throw 'No-identity EXO SendAs query should not be used.' }
+        $script:ExoSendAsLookups.Add([string]$Identity) | Out-Null
+        if ([string]$Identity -ne 'jane@contoso.com') { return @() }
+        return @(
             [pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'bob@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false },
-            [pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'NT AUTHORITY\SELF'; AccessRights = @('SendAs'); IsInherited = $false },
-            [pscustomobject]@{ Identity = 'Someone Else'; Trustee = 'eve@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false }
+            [pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'NT AUTHORITY\SELF'; AccessRights = @('SendAs'); IsInherited = $false }
         )
     }
+    function Get-RecipientPermission {
+        param($Identity, $ResultSize, $ErrorAction)
+        throw 'Legacy Get-RecipientPermission should not be used when Get-EXORecipientPermission exists.'
+    }
     $rows = @(Get-SendAsRows -Recipients $recipients -UseOrgWideQuery $true)
+    Assert-True -Condition ($script:ExoSendAsLookups.Count -eq 2 -and $script:ExoSendAsLookups[0] -eq 'jane@contoso.com' -and $script:ExoSendAsLookups[1] -eq 'nosendas@contoso.com') -Name 'Get-SendAsRows uses per-recipient EXO queries for multi-object runs'
     Assert-True -Condition ($rows.Count -eq 1 -and $rows[0].Trustee -eq 'bob@contoso.com') -Name 'Get-SendAsRows org-wide filters to inventory and drops SELF'
 
-    # Per-identity mode must pass the Guid, not the display name.
+    # Per-identity mode should use a stable SMTP lookup rather than the Exchange object Guid.
     $script:SendAsLookups = [System.Collections.Generic.List[string]]::new()
-    function Get-RecipientPermission {
+    function Get-EXORecipientPermission {
         param($Identity, $ResultSize, $ErrorAction)
         $script:SendAsLookups.Add([string]$Identity) | Out-Null
         @([pscustomobject]@{ Identity = 'Jane Doe'; Trustee = 'bob@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false })
     }
     $rows = @(Get-SendAsRows -Recipients $recipients -UseOrgWideQuery $false)
-    Assert-True -Condition ($script:SendAsLookups[0] -eq '22222222-2222-2222-2222-222222222222') -Name 'Get-SendAsRows per-identity uses Guid'
+    Assert-True -Condition ($script:SendAsLookups[0] -eq 'jane@contoso.com') -Name 'Get-SendAsRows per-identity uses primary SMTP address'
 
-    # FullAccess must pass the Guid too.
+    # FullAccess should use PrimarySmtpAddress, which Learn documents as a supported identity parameter.
     $script:FullAccessLookups = [System.Collections.Generic.List[string]]::new()
     function Get-EXOMailboxPermission {
         param($Identity, $ErrorAction)
@@ -208,7 +234,7 @@ function Test-SendAsAndFullAccess {
         @([pscustomobject]@{ User = 'bob@contoso.com'; AccessRights = @('FullAccess'); IsInherited = $false; Deny = $false })
     }
     $rows = @(Get-FullAccessRows -Recipient $recipients[0])
-    Assert-True -Condition ($script:FullAccessLookups[0] -eq '22222222-2222-2222-2222-222222222222') -Name 'Get-FullAccessRows uses Guid'
+    Assert-True -Condition ($script:FullAccessLookups[0] -eq 'jane@contoso.com') -Name 'Get-FullAccessRows uses primary SMTP address'
     Assert-True -Condition ($rows.Count -eq 1 -and $rows[0].Trustee -eq 'bob@contoso.com') -Name 'Get-FullAccessRows maps rows'
 }
 Test-SendAsAndFullAccess
@@ -218,6 +244,14 @@ function Test-LookupIdentityHelperRemoved {
     Assert-True -Condition ($scriptText -notmatch 'Get-ExchangeLookupIdentity') -Name 'Get-ExchangeLookupIdentity removed'
 }
 Test-LookupIdentityHelperRemoved
+
+function Test-ConnectionOrder {
+    $scriptText = Get-Content -Path $script:ScriptPath -Raw
+    $graphIndex = $scriptText.IndexOf('$graphConnected = Connect-GraphIfNeeded')
+    $exchangeIndex = $scriptText.IndexOf('Connect-ExchangeOnline')
+    Assert-True -Condition ($graphIndex -ge 0 -and $exchangeIndex -ge 0 -and $graphIndex -lt $exchangeIndex) -Name 'Graph connects before Exchange to avoid assembly conflicts'
+}
+Test-ConnectionOrder
 
 function Test-Consolidation {
     $objects = @([pscustomobject]@{

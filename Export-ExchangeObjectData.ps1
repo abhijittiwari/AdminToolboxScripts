@@ -56,7 +56,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:Errors = New-Object System.Collections.Generic.List[object]
+# FIX: was `New-Object System.Collections.Generic.List[object]`. New-Object returns the list
+# wrapped in a PSObject; in PowerShell 7, @() over an EMPTY PSObject-wrapped generic list throws
+# "Argument types do not match", which killed clean (zero-error) runs at New-ConsolidatedRows.
+$script:Errors = [System.Collections.Generic.List[object]]::new()
 
 function Add-ExportError {
     param(
@@ -74,6 +77,17 @@ function Add-ExportError {
     }) | Out-Null
 
     Write-Warning "[$Stage/$Operation] $Identity $Message"
+}
+
+$script:TotalPhases = 7
+
+function Write-PhaseProgress {
+    param(
+        [Parameter(Mandatory = $true)] [int]$Phase,
+        [Parameter(Mandatory = $true)] [string]$Name
+    )
+
+    Write-Progress -Id 0 -Activity 'Export-ExchangeObjectData' -Status "Step $Phase of $($script:TotalPhases): $Name" -PercentComplete ((($Phase - 1) / $script:TotalPhases) * 100)
 }
 
 function Initialize-OutputFolder {
@@ -205,7 +219,9 @@ function Get-FullAccessRows {
         return @()
     }
 
-    $lookupIdentity = [string]$Recipient.Guid
+    $lookupIdentity = [string]$Recipient.PrimarySmtpAddress
+    if ([string]::IsNullOrWhiteSpace($lookupIdentity)) { $lookupIdentity = [string]$Recipient.ExternalDirectoryObjectId }
+    if ([string]::IsNullOrWhiteSpace($lookupIdentity)) { $lookupIdentity = [string]$Recipient.Guid }
 
     try {
         return @(
@@ -236,6 +252,18 @@ function Test-IsSelfTrustee {
     return $normalized -in @('NT AUTHORITY\SELF', 'SELF', 'S-1-5-10')
 }
 
+function Get-SendAsPermissionCommandName {
+    if (Get-Command Get-EXORecipientPermission -ErrorAction SilentlyContinue) {
+        return 'Get-EXORecipientPermission'
+    }
+
+    if (Get-Command Get-RecipientPermission -ErrorAction SilentlyContinue) {
+        return 'Get-RecipientPermission'
+    }
+
+    return ''
+}
+
 function Get-SendAsRows {
     param(
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$Recipients,
@@ -243,12 +271,25 @@ function Get-SendAsRows {
     )
 
     $rows = [System.Collections.Generic.List[object]]::new()
+    $permissionCommand = Get-SendAsPermissionCommandName
 
-    if ($UseOrgWideQuery) {
+    if ([string]::IsNullOrWhiteSpace($permissionCommand)) {
+        Add-ExportError -Identity '' -Stage 'SendAs' -Operation 'Get-EXORecipientPermission' -Message 'Neither Get-EXORecipientPermission nor Get-RecipientPermission is available in this Exchange Online session.'
+        return @($rows)
+    }
+
+    if ($UseOrgWideQuery -and $permissionCommand -eq 'Get-RecipientPermission') {
         $recipientsByIdentity = @{}
         foreach ($recipient in @($Recipients)) { $recipientsByIdentity[[string]$recipient.Identity] = $recipient }
         try {
-            foreach ($permission in @(Get-RecipientPermission -ResultSize Unlimited -ErrorAction Stop)) {
+            Write-Progress -Id 1 -ParentId 0 -Activity 'Collecting SendAs permissions' -Status 'Running org-wide Get-RecipientPermission query (this can take a while)...'
+            $allPermissions = @(& $permissionCommand -ResultSize Unlimited -ErrorAction Stop)
+            $permissionIndex = 0
+            foreach ($permission in $allPermissions) {
+                $permissionIndex++
+                if ($permissionIndex % 100 -eq 0 -or $permissionIndex -eq $allPermissions.Count) {
+                    Write-Progress -Id 1 -ParentId 0 -Activity 'Collecting SendAs permissions' -Status "Processing $permissionIndex of $($allPermissions.Count) permission entries" -PercentComplete (($permissionIndex / [Math]::Max($allPermissions.Count, 1)) * 100)
+                }
                 $identity = [string]$permission.Identity
                 if (-not $recipientsByIdentity.ContainsKey($identity)) { continue }
                 if ($permission.IsInherited) { continue }
@@ -264,14 +305,21 @@ function Get-SendAsRows {
             }
         }
         catch {
-            Add-ExportError -Identity '' -Stage 'SendAs' -Operation 'Get-RecipientPermission (org-wide)' -Message $_.Exception.Message
+            Add-ExportError -Identity '' -Stage 'SendAs' -Operation "$permissionCommand (org-wide)" -Message $_.Exception.Message
         }
+        Write-Progress -Id 1 -Completed
         return @($rows)
     }
 
+    $recipientIndex = 0
     foreach ($recipient in @($Recipients)) {
+        $recipientIndex++
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Collecting SendAs permissions' -Status "$recipientIndex of $($Recipients.Count): $($recipient.Identity)" -PercentComplete (($recipientIndex / [Math]::Max($Recipients.Count, 1)) * 100)
+        $lookupIdentity = [string]$recipient.PrimarySmtpAddress
+        if ([string]::IsNullOrWhiteSpace($lookupIdentity)) { $lookupIdentity = [string]$recipient.ExternalDirectoryObjectId }
+        if ([string]::IsNullOrWhiteSpace($lookupIdentity)) { $lookupIdentity = [string]$recipient.Guid }
         try {
-            foreach ($permission in @(Get-RecipientPermission -Identity ([string]$recipient.Guid) -ErrorAction Stop)) {
+            foreach ($permission in @(& $permissionCommand -Identity $lookupIdentity -ErrorAction Stop)) {
                 if ($permission.IsInherited) { continue }
                 if (Test-IsSelfTrustee -Trustee ([string]$permission.Trustee)) { continue }
                 if ($permission.AccessRights -notcontains 'SendAs') { continue }
@@ -285,9 +333,10 @@ function Get-SendAsRows {
             }
         }
         catch {
-            Add-ExportError -Identity ([string]$recipient.Identity) -Stage 'SendAs' -Operation 'Get-RecipientPermission' -Message $_.Exception.Message
+            Add-ExportError -Identity ([string]$recipient.Identity) -Stage 'SendAs' -Operation $permissionCommand -Message "$($_.Exception.Message) (lookup: $lookupIdentity)"
         }
     }
+    Write-Progress -Id 1 -Completed
     return @($rows)
 }
 
@@ -343,7 +392,7 @@ function Invoke-GraphBatch {
 
         for ($offset = 0; $offset -lt $pending.Count; $offset += 20) {
             $chunk = @($pending[$offset..([Math]::Min($offset + 19, $pending.Count - 1))])
-            Write-Progress -Activity $Activity -Status "attempt $attempt, $([Math]::Min($offset + 20, $pending.Count)) of $($pending.Count)" -PercentComplete ((($totalCount - $pending.Count + $offset) / $totalCount) * 100)
+            Write-Progress -Id 1 -ParentId 0 -Activity $Activity -Status "attempt $attempt, $([Math]::Min($offset + 20, $pending.Count)) of $($pending.Count)" -PercentComplete ((($totalCount - $pending.Count + $offset) / $totalCount) * 100)
             $body = @{ requests = @($chunk | ForEach-Object { @{ id = [string]$_.Id; method = 'GET'; url = [string]$_.Url } }) }
 
             try {
@@ -384,12 +433,33 @@ function Invoke-GraphBatch {
         $attempt++
     }
 
-    Write-Progress -Activity $Activity -Completed
+    Write-Progress -Id 1 -Activity $Activity -Completed
     foreach ($leftover in $pending) {
         if ($OnItemError) { & $OnItemError ([string]$leftover.Id) "Gave up after $MaxAttempts attempts (throttled or failed)" }
     }
 
     return $results
+}
+
+# FIX: memberOf is only defined on concrete Graph types (user, group, orgContact) - the
+# directoryObject base type has no memberOf navigation in v1.0 $metadata, so
+# /directoryObjects/{id}/memberOf fails with 400 for every recipient and the membership
+# CSVs came back empty.
+function Get-GraphMemberOfResourceSegment {
+    param([Parameter(Mandatory = $true)] $Recipient)
+
+    $typeDetails = [string]$Recipient.RecipientTypeDetails
+    $type = [string]$Recipient.RecipientType
+
+    if ($typeDetails -eq 'MailContact' -or $type -eq 'MailContact') {
+        return 'contacts'
+    }
+
+    if ($typeDetails -eq 'GroupMailbox' -or $typeDetails -match 'Group$' -or $type -match 'Group') {
+        return 'groups'
+    }
+
+    return 'users'
 }
 
 function Get-MembershipRows {
@@ -410,9 +480,10 @@ function Get-MembershipRows {
         if ([string]::IsNullOrWhiteSpace($externalId)) { continue }
         if ($recipientsById.ContainsKey($externalId)) { continue }
         $recipientsById[$externalId] = $recipient
+        $segment = Get-GraphMemberOfResourceSegment -Recipient $recipient
         $requests.Add(@{
             Id  = $externalId
-            Url = "/directoryObjects/$externalId/memberOf/microsoft.graph.group?`$select=id,displayName,mail,mailEnabled,securityEnabled&`$top=999"
+            Url = "/$segment/$externalId/memberOf?`$select=id,displayName,mail,mailEnabled,securityEnabled&`$top=999"
         }) | Out-Null
     }
 
@@ -424,7 +495,13 @@ function Get-MembershipRows {
 
     $responses = Invoke-GraphBatch -Requests @($requests) -GraphRequest $GraphRequest -OnItemError $onItemError -Activity 'Collecting group memberships via Microsoft Graph'
 
-    foreach ($externalId in @($responses.Keys)) {
+    $responseKeys = @($responses.Keys)
+    $membershipIndex = 0
+    foreach ($externalId in $responseKeys) {
+        $membershipIndex++
+        if ($membershipIndex % 25 -eq 0 -or $membershipIndex -eq $responseKeys.Count) {
+            Write-Progress -Id 1 -ParentId 0 -Activity 'Processing group membership results' -Status "$membershipIndex of $($responseKeys.Count)" -PercentComplete (($membershipIndex / [Math]::Max($responseKeys.Count, 1)) * 100)
+        }
         $recipient = $recipientsById[$externalId]
         $body = $responses[$externalId]
 
@@ -445,6 +522,9 @@ function Get-MembershipRows {
         }
 
         foreach ($group in $groups) {
+            $odataType = [string]$group.'@odata.type'
+            if (-not [string]::IsNullOrWhiteSpace($odataType) -and $odataType -ne '#microsoft.graph.group') { continue }
+
             $groupMail = [string]$group.mail
             $entraRows.Add([pscustomobject]@{
                 Identity             = [string]$recipient.Identity
@@ -467,6 +547,7 @@ function Get-MembershipRows {
         }
     }
 
+    Write-Progress -Id 1 -Completed
     return @{ Entra = @($entraRows); Exchange = @($exchangeRows) }
 }
 
@@ -480,9 +561,14 @@ function Get-TargetRecipients {
     }
 
     $identities = @(Get-InputIdentityList)
-    $recipients = New-Object System.Collections.Generic.List[object]
+    # FIX: was `New-Object System.Collections.Generic.List[object]` - same PSObject-wrapping issue
+    # as $script:Errors; `return @($recipients)` would throw if zero identities resolved.
+    $recipients = [System.Collections.Generic.List[object]]::new()
 
+    $lookupIndex = 0
     foreach ($inputIdentity in $identities) {
+        $lookupIndex++
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Resolving input identities' -Status "$lookupIndex of $($identities.Count): $inputIdentity" -PercentComplete (($lookupIndex / [Math]::Max($identities.Count, 1)) * 100)
         try {
             $recipient = Get-EXORecipient -Identity $inputIdentity -Properties RecipientTypeDetails,ExternalDirectoryObjectId,PrimarySmtpAddress,Alias,Guid,DistinguishedName,EmailAddresses -ErrorAction Stop
             if (Test-RecipientMatchesType -Recipient $recipient -SelectedRecipientType $RecipientType) {
@@ -497,6 +583,7 @@ function Get-TargetRecipients {
         }
     }
 
+    Write-Progress -Id 1 -Completed
     return @($recipients)
 }
 
@@ -537,7 +624,12 @@ function New-ConsolidatedRows {
     $entraGroupIndex = Group-RowsByIdentity -Rows $EntraGroupRows
     $errorIndex = Group-RowsByIdentity -Rows $ErrorRows
 
+    $consolidateIndex = 0
     foreach ($object in $Objects) {
+        $consolidateIndex++
+        if ($consolidateIndex % 25 -eq 0 -or $consolidateIndex -eq $Objects.Count) {
+            Write-Progress -Id 1 -ParentId 0 -Activity 'Consolidating object data' -Status "$consolidateIndex of $($Objects.Count)" -PercentComplete (($consolidateIndex / [Math]::Max($Objects.Count, 1)) * 100)
+        }
         $identity = [string]$object.Identity
         [pscustomobject]@{
             Identity                  = $object.Identity
@@ -557,6 +649,7 @@ function New-ConsolidatedRows {
             HasErrors                 = [bool]($errorIndex.ContainsKey($identity) -and $errorIndex[$identity].Count -gt 0)
         }
     }
+    Write-Progress -Id 1 -Completed
 }
 
 function Export-CsvWithHeaders {
@@ -588,14 +681,24 @@ function Export-ReportCsvs {
         [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [object[]]$ErrorRows
     )
 
-    Export-CsvWithHeaders -Rows $ConsolidatedRows -Path (Join-Path $Folder 'Objects-Consolidated.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'ProxyAddresses', 'FullAccessTrustees', 'SendAsTrustees', 'ExchangeGroupMemberships', 'EntraGroupMemberships', 'HasErrors')
-    Export-CsvWithHeaders -Rows $Objects -Path (Join-Path $Folder 'Objects.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'DistinguishedName')
-    Export-CsvWithHeaders -Rows $ProxyRows -Path (Join-Path $Folder 'ProxyAddresses.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'AddressType', 'ProxyAddress', 'RawProxyAddress', 'IsPrimarySmtp')
-    Export-CsvWithHeaders -Rows $FullAccessRows -Path (Join-Path $Folder 'FullAccess.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'Deny', 'IsInherited')
-    Export-CsvWithHeaders -Rows $SendAsRows -Path (Join-Path $Folder 'SendAs.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'IsInherited')
-    Export-CsvWithHeaders -Rows $ExchangeGroupRows -Path (Join-Path $Folder 'ExchangeGroupMemberships.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'GroupIdentity')
-    Export-CsvWithHeaders -Rows $EntraGroupRows -Path (Join-Path $Folder 'EntraGroupMemberships.csv') -Headers @('Identity', 'PrimarySmtpAddress', 'GroupId', 'GroupDisplayName', 'GroupMail', 'GroupSecurityEnabled')
-    Export-CsvWithHeaders -Rows $ErrorRows -Path (Join-Path $Folder 'Errors.csv') -Headers @('Identity', 'Stage', 'Operation', 'Message')
+    $exports = @(
+        @{ Name = 'Objects-Consolidated.csv';     Rows = $ConsolidatedRows;  Headers = @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'ProxyAddresses', 'FullAccessTrustees', 'SendAsTrustees', 'ExchangeGroupMemberships', 'EntraGroupMemberships', 'HasErrors') }
+        @{ Name = 'Objects.csv';                  Rows = $Objects;           Headers = @('Identity', 'DisplayName', 'RecipientType', 'RecipientTypeDetails', 'MailboxType', 'PrimarySmtpAddress', 'Alias', 'ExternalDirectoryObjectId', 'ExchangeObjectId', 'DistinguishedName') }
+        @{ Name = 'ProxyAddresses.csv';           Rows = $ProxyRows;         Headers = @('Identity', 'PrimarySmtpAddress', 'AddressType', 'ProxyAddress', 'RawProxyAddress', 'IsPrimarySmtp') }
+        @{ Name = 'FullAccess.csv';               Rows = $FullAccessRows;    Headers = @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'Deny', 'IsInherited') }
+        @{ Name = 'SendAs.csv';                   Rows = $SendAsRows;        Headers = @('Identity', 'PrimarySmtpAddress', 'Trustee', 'AccessRights', 'IsInherited') }
+        @{ Name = 'ExchangeGroupMemberships.csv'; Rows = $ExchangeGroupRows; Headers = @('Identity', 'PrimarySmtpAddress', 'GroupIdentity') }
+        @{ Name = 'EntraGroupMemberships.csv';    Rows = $EntraGroupRows;    Headers = @('Identity', 'PrimarySmtpAddress', 'GroupId', 'GroupDisplayName', 'GroupMail', 'GroupSecurityEnabled') }
+        @{ Name = 'Errors.csv';                   Rows = $ErrorRows;         Headers = @('Identity', 'Stage', 'Operation', 'Message') }
+    )
+
+    $exportIndex = 0
+    foreach ($export in $exports) {
+        $exportIndex++
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Writing CSV exports' -Status "$exportIndex of $($exports.Count): $($export.Name)" -PercentComplete (($exportIndex / $exports.Count) * 100)
+        Export-CsvWithHeaders -Rows @($export.Rows) -Path (Join-Path $Folder $export.Name) -Headers $export.Headers
+    }
+    Write-Progress -Id 1 -Completed
 }
 
 function ConvertTo-JsonLiteral {
@@ -777,15 +880,27 @@ $isMultiObjectRun = $PSCmdlet.ParameterSetName -in @('All', 'Csv')
 Write-Host "Output folder: $resolvedOutputFolder" -ForegroundColor Cyan
 Write-Host "Recipient type: $RecipientType" -ForegroundColor Cyan
 
+$graphConnected = Connect-GraphIfNeeded
+
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
 Connect-ExchangeOnline -ShowBanner:$false
 
+Write-PhaseProgress -Phase 1 -Name 'Loading recipient inventory'
 $targetRecipients = @(Get-TargetRecipients)
-$objects = @($targetRecipients | ForEach-Object { ConvertTo-ExportObject -Recipient $_ })
+
+$objectList = [System.Collections.Generic.List[object]]::new()
+$objectIndex = 0
+foreach ($recipient in $targetRecipients) {
+    $objectIndex++
+    if ($objectIndex % 50 -eq 0 -or $objectIndex -eq $targetRecipients.Count) {
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Building object inventory' -Status "$objectIndex of $($targetRecipients.Count)" -PercentComplete (($objectIndex / [Math]::Max($targetRecipients.Count, 1)) * 100)
+    }
+    $objectList.Add((ConvertTo-ExportObject -Recipient $recipient)) | Out-Null
+}
+$objects = @($objectList)
+Write-Progress -Id 1 -Completed
 
 Write-Host "Objects selected: $($objects.Count)" -ForegroundColor Green
-
-$graphConnected = Connect-GraphIfNeeded
 
 $proxyRows = [System.Collections.Generic.List[object]]::new()
 $fullAccessRows = [System.Collections.Generic.List[object]]::new()
@@ -795,11 +910,19 @@ $entraGroupMembershipRows = [System.Collections.Generic.List[object]]::new()
 
 # Phase 2: proxy addresses (in-memory, from the Phase 1 inventory)
 Write-Host 'Deriving proxy address rows from inventory...' -ForegroundColor Cyan
+Write-PhaseProgress -Phase 2 -Name 'Deriving proxy addresses'
+$proxyRecipientIndex = 0
 foreach ($recipient in $targetRecipients) {
+    $proxyRecipientIndex++
+    if ($proxyRecipientIndex % 50 -eq 0 -or $proxyRecipientIndex -eq $targetRecipients.Count) {
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Deriving proxy addresses' -Status "$proxyRecipientIndex of $($targetRecipients.Count)" -PercentComplete (($proxyRecipientIndex / [Math]::Max($targetRecipients.Count, 1)) * 100)
+    }
     foreach ($row in @(ConvertTo-ProxyRows -Recipient $recipient)) { $proxyRows.Add($row) | Out-Null }
 }
+Write-Progress -Id 1 -Completed
 
 # Phase 3: group memberships (Microsoft Graph $batch)
+Write-PhaseProgress -Phase 3 -Name 'Collecting group memberships (Graph)'
 if ($graphConnected) {
     Write-Host 'Collecting group memberships via Microsoft Graph...' -ForegroundColor Cyan
     $membershipRows = Get-MembershipRows -Recipients $targetRecipients
@@ -812,18 +935,23 @@ else {
 
 # Phase 4a: SendAs permissions (org-wide sweep on -All)
 Write-Host 'Collecting SendAs permissions...' -ForegroundColor Cyan
+Write-PhaseProgress -Phase 4 -Name 'Collecting SendAs permissions'
 foreach ($row in @(Get-SendAsRows -Recipients $targetRecipients -UseOrgWideQuery ($PSCmdlet.ParameterSetName -eq 'All'))) { $sendAsRows.Add($row) | Out-Null }
 
 # Phase 4b: FullAccess permissions (per mailbox; no bulk API exists)
+Write-Host 'Collecting FullAccess permissions...' -ForegroundColor Cyan
+Write-PhaseProgress -Phase 5 -Name 'Collecting FullAccess permissions'
 $mailboxRecipients = @($targetRecipients | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-MailboxType -Recipient $_)) })
 $index = 0
 foreach ($recipient in $mailboxRecipients) {
     $index++
-    Write-Progress -Activity 'Collecting FullAccess permissions' -Status "$index of $($mailboxRecipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($mailboxRecipients.Count, 1)) * 100)
+    Write-Progress -Id 1 -ParentId 0 -Activity 'Collecting FullAccess permissions' -Status "$index of $($mailboxRecipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($mailboxRecipients.Count, 1)) * 100)
     foreach ($row in @(Get-FullAccessRows -Recipient $recipient)) { $fullAccessRows.Add($row) | Out-Null }
 }
-Write-Progress -Activity 'Collecting FullAccess permissions' -Completed
+Write-Progress -Id 1 -Activity 'Collecting FullAccess permissions' -Completed
 
+Write-Host 'Consolidating and exporting...' -ForegroundColor Cyan
+Write-PhaseProgress -Phase 6 -Name 'Consolidating object data'
 $consolidatedRows = @(
     New-ConsolidatedRows `
         -Objects $objects `
@@ -835,6 +963,7 @@ $consolidatedRows = @(
         -ErrorRows @($script:Errors)
 )
 
+Write-PhaseProgress -Phase 7 -Name 'Writing CSV exports and dashboard'
 Export-ReportCsvs `
     -Folder $resolvedOutputFolder `
     -Objects $objects `
@@ -850,6 +979,7 @@ Write-Host "CSV exports written to: $resolvedOutputFolder" -ForegroundColor Gree
 
 if ($isMultiObjectRun -and -not $NoDashboard) {
     try {
+        Write-Progress -Id 1 -ParentId 0 -Activity 'Writing dashboard' -Status 'Dashboard.html'
         Export-DashboardHtml `
             -Folder $resolvedOutputFolder `
             -ConsolidatedRows $consolidatedRows `
@@ -865,6 +995,9 @@ if ($isMultiObjectRun -and -not $NoDashboard) {
         @($script:Errors) | Export-Csv -Path (Join-Path $resolvedOutputFolder 'Errors.csv') -NoTypeInformation -Encoding UTF8
     }
 }
+
+Write-Progress -Id 1 -Completed
+Write-Progress -Id 0 -Activity 'Export-ExchangeObjectData' -Completed
 
 Write-Host "Objects exported: $($objects.Count)" -ForegroundColor Green
 Write-Host "Errors logged: $($script:Errors.Count)" -ForegroundColor Yellow
