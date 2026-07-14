@@ -68,11 +68,20 @@ function Add-UserRole {
     }
 }
 
+function Test-GraphNotFoundError {
+    param([Parameter(Mandatory = $true)] [System.Management.Automation.ErrorRecord]$ErrorRecord)
+
+    $message = $ErrorRecord.Exception.Message
+    $errorId = $ErrorRecord.FullyQualifiedErrorId
+    return ($errorId -match 'Request_ResourceNotFound|NotFound|404' -or $message -match 'Request_ResourceNotFound|NotFound|404|does not exist')
+}
+
 function Resolve-RolePrincipal {
     param(
         [Parameter(Mandatory = $true)] [string]$PrincipalId,
         [Parameter(Mandatory = $true)] [string]$RoleName,
-        [Parameter(Mandatory = $true)] [hashtable]$RoleMap
+        [Parameter(Mandatory = $true)] [hashtable]$RoleMap,
+        [System.Collections.Generic.List[string]]$EnvironmentWarnings
     )
 
     $principal = Get-MgDirectoryObjectById -Ids $PrincipalId -ErrorAction SilentlyContinue
@@ -84,11 +93,21 @@ function Resolve-RolePrincipal {
         }
         '#microsoft.graph.group' {
             $groupName = $principal.AdditionalProperties.displayName
-            Get-MgGroupTransitiveMember -GroupId $PrincipalId -All -ErrorAction SilentlyContinue |
-                Where-Object { $_.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user' } |
-                ForEach-Object {
-                    Add-UserRole -RoleMap $RoleMap -UserId $_.Id -RoleName "$RoleName via group: $groupName"
+            try {
+                Get-MgGroupTransitiveMember -GroupId $PrincipalId -All -ErrorAction Stop |
+                    Where-Object { $_.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user' } |
+                    ForEach-Object {
+                        Add-UserRole -RoleMap $RoleMap -UserId $_.Id -RoleName "$RoleName via group: $groupName"
+                    }
+            }
+            catch {
+                $groupLabel = if ([string]::IsNullOrWhiteSpace($groupName)) { $PrincipalId } else { $groupName }
+                $warning = "Group role expansion failed for ${groupLabel}: $($_.Exception.Message)"
+                if ($null -ne $EnvironmentWarnings) {
+                    $EnvironmentWarnings.Add($warning) | Out-Null
                 }
+                Write-Warning $warning
+            }
         }
     }
 }
@@ -102,13 +121,14 @@ function Get-TenantRoleIndex {
     $activeRoles = @{}
     $eligibleRoles = @{}
     $pimWarning = ''
+    $environmentWarnings = [System.Collections.Generic.List[string]]::new()
 
     Write-Host 'Collecting active Entra ID role assignments...' -ForegroundColor Cyan
     $activeAssignments = @(Get-MgRoleManagementDirectoryRoleAssignment -All)
     foreach ($assignment in $activeAssignments) {
         $roleName = $roleDefinitions[$assignment.RoleDefinitionId]
         if ($roleName) {
-            Resolve-RolePrincipal -PrincipalId $assignment.PrincipalId -RoleName "$roleName (Active)" -RoleMap $activeRoles
+            Resolve-RolePrincipal -PrincipalId $assignment.PrincipalId -RoleName "$roleName (Active)" -RoleMap $activeRoles -EnvironmentWarnings $environmentWarnings
         }
     }
 
@@ -118,7 +138,7 @@ function Get-TenantRoleIndex {
         foreach ($assignment in $eligibleAssignments) {
             $roleName = $roleDefinitions[$assignment.RoleDefinitionId]
             if ($roleName) {
-                Resolve-RolePrincipal -PrincipalId $assignment.PrincipalId -RoleName "$roleName (PIM Eligible)" -RoleMap $eligibleRoles
+                Resolve-RolePrincipal -PrincipalId $assignment.PrincipalId -RoleName "$roleName (PIM Eligible)" -RoleMap $eligibleRoles -EnvironmentWarnings $environmentWarnings
             }
         }
     }
@@ -131,6 +151,7 @@ function Get-TenantRoleIndex {
         ActiveRoles  = $activeRoles
         EligibleRoles = $eligibleRoles
         PimWarning   = $pimWarning
+        EnvironmentWarnings = Join-ReportValues -Values $environmentWarnings
     }
 }
 
@@ -138,7 +159,7 @@ function Get-UserReportRow {
     param(
         [Parameter(Mandatory = $true)] [string]$Environment,
         [Parameter(Mandatory = $true)] [string]$Prefix,
-        [Parameter(Mandatory = $true)] [string]$InputUPN,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [string]$InputUPN,
         [Parameter(Mandatory = $true)] [object]$RoleIndex
     )
 
@@ -146,11 +167,12 @@ function Get-UserReportRow {
     if (-not [string]::IsNullOrWhiteSpace($RoleIndex.PimWarning)) {
         $errorMessages.Add($RoleIndex.PimWarning) | Out-Null
     }
-
-    try {
-        $user = Get-MgUser -UserId $InputUPN -Property 'id,displayName,userPrincipalName,onPremisesImmutableId' -ErrorAction Stop
+    if (-not [string]::IsNullOrWhiteSpace($RoleIndex.EnvironmentWarnings)) {
+        $errorMessages.Add($RoleIndex.EnvironmentWarnings) | Out-Null
     }
-    catch {
+
+    if ([string]::IsNullOrWhiteSpace($InputUPN)) {
+        $errorMessages.Add('Input UPN is blank.') | Out-Null
         return [pscustomobject]@{
             Environment               = $Environment
             Prefix                    = $Prefix
@@ -162,17 +184,40 @@ function Get-UserReportRow {
             PimEligibleDirectoryRoles = ''
             AllDirectoryRoles         = ''
             LicensesAssigned          = ''
-            LookupStatus              = 'NotFound'
-            Error                     = "User lookup failed: $($_.Exception.Message)"
+            LookupStatus              = 'Error'
+            Error                     = Join-ReportValues -Values $errorMessages
+        }
+    }
+
+    try {
+        $user = Get-MgUser -UserId $InputUPN -Property 'id,displayName,userPrincipalName,onPremisesImmutableId' -ErrorAction Stop
+    }
+    catch {
+        $errorMessages.Add("User lookup failed: $($_.Exception.Message)") | Out-Null
+        return [pscustomobject]@{
+            Environment               = $Environment
+            Prefix                    = $Prefix
+            InputUPN                  = $InputUPN
+            UserPrincipalName         = ''
+            DisplayName               = ''
+            ImmutableId               = ''
+            ActiveDirectoryRoles      = ''
+            PimEligibleDirectoryRoles = ''
+            AllDirectoryRoles         = ''
+            LicensesAssigned          = ''
+            LookupStatus              = if (Test-GraphNotFoundError -ErrorRecord $_) { 'NotFound' } else { 'Error' }
+            Error                     = Join-ReportValues -Values $errorMessages
         }
     }
 
     $licenses = ''
+    $lookupStatus = 'Found'
     try {
         $licenses = Join-ReportValues -Values @(Get-MgUserLicenseDetail -UserId $user.Id -ErrorAction Stop | Select-Object -ExpandProperty SkuPartNumber)
     }
     catch {
         $errorMessages.Add("License lookup failed: $($_.Exception.Message)") | Out-Null
+        $lookupStatus = 'Error'
     }
 
     $activeRoles = if ($RoleIndex.ActiveRoles.ContainsKey($user.Id)) { Join-ReportValues -Values $RoleIndex.ActiveRoles[$user.Id] } else { '' }
@@ -197,7 +242,7 @@ function Get-UserReportRow {
         PimEligibleDirectoryRoles = $eligibleRoles
         AllDirectoryRoles         = $allRoles
         LicensesAssigned          = $licenses
-        LookupStatus              = 'Found'
+        LookupStatus              = $lookupStatus
         Error                     = Join-ReportValues -Values $errorMessages
     }
 }

@@ -40,6 +40,105 @@ function Assert-True {
 
 . Import-ScriptFunctions
 
+$script:GraphStub = @{}
+
+function Reset-GraphStub {
+    $script:GraphStub = @{
+        Users             = @{}
+        UserFailures      = @{}
+        LicenseFailures   = @{}
+        LicenseDetails    = @{}
+        RoleDefinitions   = @()
+        ActiveAssignments = @()
+        EligibleAssignments = @()
+        DirectoryObjects  = @{}
+        GroupMembers      = @{}
+        GroupFailures     = @{}
+    }
+}
+
+function New-StubErrorRecord {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Message,
+        [Parameter(Mandatory = $true)] [string]$ErrorId
+    )
+
+    $exception = [System.Exception]::new($Message)
+    return [System.Management.Automation.ErrorRecord]::new(
+        $exception,
+        $ErrorId,
+        [System.Management.Automation.ErrorCategory]::NotSpecified,
+        $null
+    )
+}
+
+function Get-MgUser {
+    param(
+        [string]$UserId,
+        [string[]]$Property,
+        [System.Management.Automation.ActionPreference]$ErrorAction
+    )
+
+    if ($script:GraphStub.UserFailures.ContainsKey($UserId)) {
+        throw $script:GraphStub.UserFailures[$UserId]
+    }
+
+    return $script:GraphStub.Users[$UserId]
+}
+
+function Get-MgUserLicenseDetail {
+    param(
+        [string]$UserId,
+        [System.Management.Automation.ActionPreference]$ErrorAction
+    )
+
+    if ($script:GraphStub.LicenseFailures.ContainsKey($UserId)) {
+        throw $script:GraphStub.LicenseFailures[$UserId]
+    }
+
+    return @($script:GraphStub.LicenseDetails[$UserId])
+}
+
+function Get-MgRoleManagementDirectoryRoleDefinition {
+    param([switch]$All)
+    return @($script:GraphStub.RoleDefinitions)
+}
+
+function Get-MgRoleManagementDirectoryRoleAssignment {
+    param([switch]$All)
+    return @($script:GraphStub.ActiveAssignments)
+}
+
+function Get-MgRoleManagementDirectoryRoleEligibilityScheduleInstance {
+    param([switch]$All)
+    return @($script:GraphStub.EligibleAssignments)
+}
+
+function Get-MgDirectoryObjectById {
+    param(
+        [string]$Ids,
+        [System.Management.Automation.ActionPreference]$ErrorAction
+    )
+    return $script:GraphStub.DirectoryObjects[$Ids]
+}
+
+function Get-MgGroupTransitiveMember {
+    param(
+        [string]$GroupId,
+        [switch]$All,
+        [System.Management.Automation.ActionPreference]$ErrorAction
+    )
+
+    if ($script:GraphStub.GroupFailures.ContainsKey($GroupId)) {
+        if ($ErrorAction -eq [System.Management.Automation.ActionPreference]::Stop) {
+            throw $script:GraphStub.GroupFailures[$GroupId]
+        }
+        return @()
+    }
+
+    return @($script:GraphStub.GroupMembers[$GroupId])
+}
+
 function Test-RequiredFunctionsExist {
     $ast = Get-ScriptAst
     $functionNames = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object Name)
@@ -89,6 +188,100 @@ function Test-StaticScriptContent {
     Assert-True -Condition ($scriptText -notmatch 'Connect-ExchangeOnline' -and $scriptText -notmatch 'Get-ManagementRoleAssignment') -Name 'Exchange Online RBAC is out of scope'
 }
 Test-StaticScriptContent
+
+function New-EmptyRoleIndex {
+    return [pscustomobject]@{
+        ActiveRoles         = @{}
+        EligibleRoles       = @{}
+        PimWarning          = ''
+        EnvironmentWarnings = ''
+    }
+}
+
+function Test-UserLookupStatusDistinguishesNotFoundAndUnexpectedErrors {
+    Reset-GraphStub
+    $script:GraphStub.UserFailures['missing@example.com'] = New-StubErrorRecord -Message "Resource 'missing@example.com' does not exist or one of its queried reference-property objects are not present." -ErrorId 'Request_ResourceNotFound'
+    $script:GraphStub.UserFailures['throttle@example.com'] = New-StubErrorRecord -Message 'Too many requests' -ErrorId 'TooManyRequests'
+
+    $missingRow = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN 'missing@example.com' -RoleIndex (New-EmptyRoleIndex)
+    $throttleRow = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN 'throttle@example.com' -RoleIndex (New-EmptyRoleIndex)
+
+    Assert-True -Condition ($missingRow.LookupStatus -eq 'NotFound') -Name 'User lookup missing user remains NotFound'
+    Assert-True -Condition ($throttleRow.LookupStatus -eq 'Error') -Name 'Unexpected user lookup failure is Error'
+}
+Test-UserLookupStatusDistinguishesNotFoundAndUnexpectedErrors
+
+function Test-LicenseFailureSetsLookupStatusError {
+    Reset-GraphStub
+    $script:GraphStub.Users['licensed@example.com'] = [pscustomobject]@{
+        Id                    = 'user-1'
+        UserPrincipalName     = 'licensed@example.com'
+        DisplayName           = 'Licensed User'
+        OnPremisesImmutableId = 'immutable-1'
+    }
+    $script:GraphStub.LicenseFailures['user-1'] = New-StubErrorRecord -Message 'License endpoint unavailable' -ErrorId 'ServiceUnavailable'
+
+    $row = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN 'licensed@example.com' -RoleIndex (New-EmptyRoleIndex)
+
+    Assert-True -Condition ($row.LookupStatus -eq 'Error') -Name 'License lookup failure sets LookupStatus Error'
+    Assert-True -Condition ($row.Error -match 'License lookup failed') -Name 'License lookup failure is reported in Error'
+}
+Test-LicenseFailureSetsLookupStatusError
+
+function Test-PimWarningPersistsWhenUserLookupFails {
+    Reset-GraphStub
+    $script:GraphStub.UserFailures['missing-pim@example.com'] = New-StubErrorRecord -Message 'Not found' -ErrorId 'Request_ResourceNotFound'
+    $roleIndex = New-EmptyRoleIndex
+    $roleIndex.PimWarning = 'Could not read PIM eligibility schedules: denied'
+
+    $row = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN 'missing-pim@example.com' -RoleIndex $roleIndex
+
+    Assert-True -Condition ($row.Error -match [regex]::Escape($roleIndex.PimWarning)) -Name 'PIM warning remains in Error when user lookup fails'
+}
+Test-PimWarningPersistsWhenUserLookupFails
+
+function Test-BlankUpnReturnsErrorRow {
+    Reset-GraphStub
+    $row = $null
+    $threw = $false
+    try {
+        $row = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN '' -RoleIndex (New-EmptyRoleIndex)
+    }
+    catch {
+        $threw = $true
+    }
+
+    Assert-True -Condition (-not $threw) -Name 'Blank UPN does not abort row generation'
+    Assert-True -Condition ($null -ne $row -and $row.LookupStatus -eq 'Error' -and $row.Error -match 'blank') -Name 'Blank UPN returns an Error row'
+}
+Test-BlankUpnReturnsErrorRow
+
+function Test-GroupExpansionWarningIsCapturedAndPropagated {
+    Reset-GraphStub
+    $script:GraphStub.RoleDefinitions = @([pscustomobject]@{ Id = 'role-1'; DisplayName = 'Global Reader' })
+    $script:GraphStub.ActiveAssignments = @([pscustomobject]@{ RoleDefinitionId = 'role-1'; PrincipalId = 'group-1' })
+    $script:GraphStub.DirectoryObjects['group-1'] = [pscustomobject]@{
+        Id = 'group-1'
+        AdditionalProperties = @{
+            '@odata.type' = '#microsoft.graph.group'
+            displayName   = 'Admins'
+        }
+    }
+    $script:GraphStub.GroupFailures['group-1'] = New-StubErrorRecord -Message 'Group members denied' -ErrorId 'Authorization_RequestDenied'
+    $script:GraphStub.Users['admin@example.com'] = [pscustomobject]@{
+        Id                    = 'user-2'
+        UserPrincipalName     = 'admin@example.com'
+        DisplayName           = 'Admin User'
+        OnPremisesImmutableId = 'immutable-2'
+    }
+
+    $roleIndex = Get-TenantRoleIndex
+    $row = Get-UserReportRow -Environment 'WAE' -Prefix 'adma' -InputUPN 'admin@example.com' -RoleIndex $roleIndex
+
+    Assert-True -Condition ($roleIndex.EnvironmentWarnings -match 'Group role expansion failed') -Name 'Group expansion warning is captured in role index'
+    Assert-True -Condition ($row.Error -match 'Group role expansion failed') -Name 'Group expansion warning is included in row Error'
+}
+Test-GroupExpansionWarningIsCapturedAndPropagated
 
 if ($script:Failures.Count -gt 0) {
     Write-Host "$($script:Failures.Count) check(s) failed." -ForegroundColor Red
