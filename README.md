@@ -13,6 +13,12 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | Script | Platform | Purpose |
 | --- | --- | --- |
 | `Export-ExchangeObjectData.ps1` | PowerShell | Exports Exchange Online recipient proxies, permissions, Exchange/Entra group memberships, CSV reports, and a searchable HTML dashboard. |
+| `Export-ExchangeObjectInventory.ps1` | PowerShell | Modular job: exports the recipient inventory (`Objects.csv`) and proxy addresses that feed the other export jobs. |
+| `Export-ExchangeGroupMemberships.ps1` | PowerShell | Modular job: exports Entra ID and Exchange group memberships via Microsoft Graph for an `Objects.csv` inventory. |
+| `Export-ExchangeSendAsPermissions.ps1` | PowerShell | Modular job: exports SendAs permissions for an `Objects.csv` inventory. |
+| `Export-ExchangeFullAccessPermissions.ps1` | PowerShell | Modular job: exports FullAccess mailbox permissions for an `Objects.csv` inventory. |
+| `Export-ExchangeObjectDataWorkbook.ps1` | PowerShell | Collates the export CSVs into a single Excel workbook (requires ImportExcel; no Excel needed). |
+| `Invoke-ExchangeObjectDataExport.ps1` | PowerShell | Runs all five modular export jobs in sequence: inventory, memberships, SendAs, FullAccess, workbook. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
@@ -102,6 +108,63 @@ The dashboard is a static local HTML file. It supports search, checkbox selectio
 - If a lookup fails for an object or permission type, the script continues and records the failure in `Errors.csv`.
 - Export files and the dashboard may contain sensitive proxy addresses, mailbox permissions, group memberships, and object identifiers. Handle them as sensitive administrative data.
 
+## Modular Exchange Export Jobs
+
+Each stage of `Export-ExchangeObjectData.ps1` is also available as a standalone job script, plus a collation script that turns the CSV folder into a single Excel workbook. The monolith is unchanged; use whichever fits the run.
+
+### Workflow
+
+Run everything in one go with the orchestrator:
+
+```powershell
+./Invoke-ExchangeObjectDataExport.ps1 -All -RecipientType Mailbox -OutputFolder ./export
+```
+
+It takes the same selection parameters as the inventory script plus `-Force` (passed to the workbook step). If the inventory fails the run aborts; if a later job fails the remaining jobs still run, the workbook is built from whatever CSVs exist, and the script exits with code 1 naming the failed jobs.
+
+Or run the jobs individually:
+
+```powershell
+# 1. Inventory (connects to Exchange Online, writes Objects.csv + ProxyAddresses.csv)
+./Export-ExchangeObjectInventory.ps1 -All -RecipientType Mailbox -OutputFolder ./export
+
+# 2. Independent jobs against the inventory (run any subset, any order)
+./Export-ExchangeGroupMemberships.ps1 -ObjectsCsv ./export/Objects.csv      # Microsoft Graph only
+./Export-ExchangeSendAsPermissions.ps1 -ObjectsCsv ./export/Objects.csv     # Exchange Online
+./Export-ExchangeFullAccessPermissions.ps1 -ObjectsCsv ./export/Objects.csv # Exchange Online
+
+# 3. Collate everything in the folder into one workbook (offline)
+./Export-ExchangeObjectDataWorkbook.ps1 -InputFolder ./export
+```
+
+### Requirements
+
+- `Export-ExchangeObjectInventory.ps1`, `Export-ExchangeSendAsPermissions.ps1`, `Export-ExchangeFullAccessPermissions.ps1`: ExchangeOnlineManagement module.
+- `Export-ExchangeGroupMemberships.ps1`: Microsoft.Graph.Authentication module (no Exchange session needed).
+- `Export-ExchangeObjectDataWorkbook.ps1`: ImportExcel module (`Install-Module ImportExcel -Scope CurrentUser`). Excel itself is not required and the workbook builds on macOS/Linux/Windows.
+
+### Parameters
+
+- `Export-ExchangeObjectInventory.ps1` takes the same selection parameters as the monolith: `-All`, `-InputCsv` + `-IdentityColumn`, or `-Identity`, plus `-RecipientType` and `-OutputFolder`.
+- The membership/permission jobs take `-ObjectsCsv` (path to `Objects.csv`) and optional `-OutputFolder` (defaults to the folder containing the objects CSV).
+- `Export-ExchangeObjectDataWorkbook.ps1` takes `-InputFolder`, optional `-OutputPath` (default `<InputFolder>/ExchangeObjectData.xlsx`), and `-Force` to overwrite an existing workbook.
+
+### Connection Behavior
+
+Job scripts reuse an existing Exchange Online or Microsoft Graph session when one exists and leave the session open, so a chained run authenticates once. Disconnect manually with `Disconnect-ExchangeOnline` / `Disconnect-MgGraph` when finished. (The monolith still manages and disconnects its own sessions.)
+
+### Output Files
+
+The jobs write the same CSV names and columns as the monolith (`Objects.csv`, `ProxyAddresses.csv`, `EntraGroupMemberships.csv`, `ExchangeGroupMemberships.csv`, `SendAs.csv`, `FullAccess.csv`), so the workbook script accepts a folder produced by either. Each job writes its own `Errors-<Job>.csv`; the workbook merges every `Errors*.csv` into one `Errors` sheet.
+
+The workbook contains a `Summary` sheet (row counts per dataset), a `Consolidated` sheet (one row per object with joined proxies, trustees, memberships, and a `HasErrors` flag), and one sheet per non-empty dataset, each with a bold frozen header row and auto-filter.
+
+### Notes
+
+- All job scripts are read-only against Exchange and Entra.
+- Recoverable per-object failures are logged to the job's errors CSV and the run continues, matching the monolith.
+- The export CSVs and workbook may contain sensitive proxy addresses, mailbox permissions, group memberships, and object identifiers. Handle them as sensitive administrative data.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports all Entra ID user accounts with directory admin access. The report includes active role assignments, PIM-eligible role assignments, role-assignable group membership expansion, license details, MFA registration, mailbox information, group memberships, account status, created date, and last sign-in activity.
@@ -170,7 +233,7 @@ The script exports a CSV and prints a console summary table. CSV columns include
 
 ## Get-CrossTenantAdminRoleAssignments.ps1
 
-Exports WAE and Fortescue admin account details from Microsoft Graph using a mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN` columns. The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors.
+Exports WAE and Fortescue admin account details from Microsoft Graph using a mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN` columns. The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors. If a Fortescue UPN is missing or cannot be found, the script strips `(Admin)` from the matching WAE display name and tries exact Fortescue `displayName` lookups for `Admin <name>` first, then `<name>`.
 
 ### Requirements
 
@@ -203,6 +266,7 @@ Exports WAE and Fortescue admin account details from Microsoft Graph using a map
 - The script connects to Microsoft Graph once for WAE and once for Fortescue; sign into the requested tenant at each prompt.
 - Exchange Online RBAC roles are not included.
 - If PIM eligibility cannot be read, active roles are still exported and the PIM warning is included in the `Error` column.
+- Fortescue rows resolved by display-name fallback use `LookupStatus=FoundByDisplayName`; ambiguous display-name matches are not guessed.
 - Missing users are exported with `LookupStatus=NotFound`.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1

@@ -76,6 +76,62 @@ Exchange Online RBAC varies by tenant, but the account must be allowed to run re
 - If `-SkipGraph` is used, expect both `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` to be emitted headers-only.
 - On `-All` runs, SendAs permissions are collected in one org-wide sweep joined to recipients by Exchange Identity; recipients sharing a display name can be misattributed, so verify SendAs row counts when duplicate display names exist in the tenant.
 
+## Modular Exchange Export Jobs
+
+Each stage of `Export-ExchangeObjectData.ps1` is also available as a standalone job script, plus a workbook collator and an orchestrator. The monolith is unchanged; both produce the same CSV names and columns.
+
+### Common Uses
+
+- Re-run a single stage (for example group memberships) without repeating the whole export.
+- Split a large tenant export across sessions or time windows.
+- Produce a single Excel workbook from an export folder for review and distribution.
+
+### Requirements
+
+- `Export-ExchangeObjectInventory.ps1`, `Export-ExchangeSendAsPermissions.ps1`, `Export-ExchangeFullAccessPermissions.ps1`: `ExchangeOnlineManagement`.
+- `Export-ExchangeGroupMemberships.ps1`: `Microsoft.Graph.Authentication` only; no Exchange session.
+- `Export-ExchangeObjectDataWorkbook.ps1`: `ImportExcel` (`Install-Module ImportExcel -Scope CurrentUser`); fully offline, Excel itself is not required.
+- `Invoke-ExchangeObjectDataExport.ps1`: all of the above; the five job scripts must sit in the same folder as the orchestrator.
+
+### Parameters
+
+| Script | Parameters |
+| --- | --- |
+| `Export-ExchangeObjectInventory.ps1` | `-All` \| `-InputCsv` + `-IdentityColumn` \| `-Identity`, plus `-RecipientType`, `-OutputFolder`. |
+| `Export-ExchangeGroupMemberships.ps1` | `-ObjectsCsv`, optional `-OutputFolder` (defaults to the objects CSV folder). |
+| `Export-ExchangeSendAsPermissions.ps1` | `-ObjectsCsv`, optional `-OutputFolder`. |
+| `Export-ExchangeFullAccessPermissions.ps1` | `-ObjectsCsv`, optional `-OutputFolder`. |
+| `Export-ExchangeObjectDataWorkbook.ps1` | `-InputFolder`, optional `-OutputPath` (default `<InputFolder>/ExchangeObjectData.xlsx`), `-Force`. |
+| `Invoke-ExchangeObjectDataExport.ps1` | Same selection parameters as the inventory script, plus `-Force` (passed to the workbook step). |
+
+### Examples
+
+```powershell
+# Everything in one run
+./Invoke-ExchangeObjectDataExport.ps1 -All -RecipientType Mailbox -OutputFolder ./export
+```
+
+```powershell
+# Stage by stage
+./Export-ExchangeObjectInventory.ps1 -All -OutputFolder ./export
+./Export-ExchangeGroupMemberships.ps1 -ObjectsCsv ./export/Objects.csv
+./Export-ExchangeSendAsPermissions.ps1 -ObjectsCsv ./export/Objects.csv
+./Export-ExchangeFullAccessPermissions.ps1 -ObjectsCsv ./export/Objects.csv
+./Export-ExchangeObjectDataWorkbook.ps1 -InputFolder ./export
+```
+
+### Output
+
+The jobs write the same CSVs as the monolith (`Objects.csv`, `ProxyAddresses.csv`, `EntraGroupMemberships.csv`, `ExchangeGroupMemberships.csv`, `SendAs.csv`, `FullAccess.csv`), so the workbook script accepts a folder produced by either. Each job writes its own `Errors-<Job>.csv`.
+
+The workbook contains a `Summary` sheet (row counts per dataset), a `Consolidated` sheet (one row per object with joined proxies, trustees, memberships, and a `HasErrors` flag), one sheet per non-empty dataset, and all `Errors*.csv` merged into one `Errors` sheet with the `Stage` column identifying the source job.
+
+### Validation Notes
+
+- Job scripts reuse an existing Exchange Online or Microsoft Graph session and leave it open, so a chained run authenticates once per service; disconnect manually when finished.
+- The orchestrator aborts if the inventory fails; later job failures are warnings, the workbook is still built, and the exit code is 1 with the failed jobs named.
+- The workbook script refuses to overwrite an existing `.xlsx` without `-Force` and rebuilds the file from scratch so stale sheets never survive.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports Entra ID user accounts with directory administrator access.
