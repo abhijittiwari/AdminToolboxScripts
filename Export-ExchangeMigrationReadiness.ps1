@@ -224,14 +224,30 @@ $licenseCache = @{}
 $index = 0
 foreach ($recipient in $recipients) {
     $index++
-    Write-Progress -Id 1 -Activity 'Assessing migration readiness' -Status "$index of $($recipients.Count): $($recipient.Identity)" -PercentComplete (($index / [Math]::Max($recipients.Count, 1)) * 100)
+    Write-Progress -Id 1 -Activity 'Assessing migration readiness' -Status "$index of $($recipients.Count): $($recipient.DisplayName)" -PercentComplete (($index / [Math]::Max($recipients.Count, 1)) * 100)
 
     try {
-        $identity = [string]$recipient.Identity
-        $mailbox = Get-EXOMailbox -Identity $identity -ErrorAction Stop -Properties LitigationHold, RetentionPolicy, ComplianceHold, ComplianceTagHold, InPlaceHolds
+        # Try multiple identity types to maximize hit rate: SMTP first, then GUID, then raw identity.
+        $lookupIdentity = $null
+        $lookupMethod = $null
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$recipient.PrimarySmtpAddress)) {
+            $lookupIdentity = [string]$recipient.PrimarySmtpAddress
+            $lookupMethod = 'SMTP'
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace([string]$recipient.ExternalDirectoryObjectId)) {
+            $lookupIdentity = [string]$recipient.ExternalDirectoryObjectId
+            $lookupMethod = 'GUID'
+        }
+        else {
+            $lookupIdentity = [string]$recipient.Identity
+            $lookupMethod = 'Identity'
+        }
+
+        $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHold, RetentionPolicy, InPlaceHolds
         $litigationHold = [bool]$mailbox.LitigationHold
         $retentionPolicy = [string]$mailbox.RetentionPolicy
-        $complianceHolds = @($mailbox.InPlaceHolds) + @($mailbox.ComplianceTagHold) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $complianceHolds = @($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
         $hasLicense = $true
         if ($IncludeLicensing) {
