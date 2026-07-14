@@ -132,6 +132,7 @@ Uses a WAE/Fortescue admin mapping CSV to export matching admin account role and
 - Review Entra ID active directory role assignments.
 - Review PIM-eligible directory role assignments when permissions and licensing allow it.
 - Export immutable IDs, actual UPNs, display names, and assigned license SKU part numbers.
+- Resolve Fortescue accounts by WAE display name when the Fortescue UPN is blank or stale, preferring `Admin <name>` over the standard user display name.
 
 ### Requirements
 
@@ -159,12 +160,13 @@ Uses a WAE/Fortescue admin mapping CSV to export matching admin account role and
 
 ### Output
 
-Writes one combined CSV with one row per mapped account per environment. Columns include environment, prefix, input UPN, actual UPN, display name, immutable ID, active roles, PIM-eligible roles, all roles, assigned license SKU part numbers, lookup status, and error text.
+Writes one combined CSV with one row per mapped account per environment. Columns include environment, prefix, input UPN, actual UPN, display name, immutable ID, active roles, PIM-eligible roles, all roles, assigned license SKU part numbers, lookup status, and error text. Fortescue rows can use `LookupStatus=FoundByDisplayName` when the script strips `(Admin)` from the WAE display name and finds exactly one Fortescue user with `Admin <name>` or, if that is absent, `<name>`.
 
 ### Validation Notes
 
 - Spot-check role assignments against the Entra admin center.
 - Check `Error` for PIM eligibility warnings or license lookup failures.
+- Check `Error` for display-name fallback details, especially ambiguous matches.
 - Confirm expected missing users appear with `LookupStatus=NotFound`.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1

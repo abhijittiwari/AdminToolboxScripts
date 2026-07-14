@@ -6,6 +6,9 @@
     Reads a CSV containing WAEUPN, Prefix, and FortescueUPN columns. The script connects
     to Microsoft Graph for WAE, exports the WAE account details, disconnects, prompts for
     Fortescue sign-in, exports the Fortescue account details, and writes one combined CSV.
+    If a Fortescue UPN is blank or stale, the script strips (Admin) from the matching WAE
+    display name and tries exact Fortescue displayName lookups for Admin <name> first,
+    then <name>, when a candidate finds exactly one user.
 
     The script is read-only. It reports Entra ID directory roles only, including active
     and PIM-eligible assignments when available.
@@ -74,6 +77,37 @@ function Test-GraphNotFoundError {
     $message = $ErrorRecord.Exception.Message
     $errorId = $ErrorRecord.FullyQualifiedErrorId
     return ($errorId -match 'Request_ResourceNotFound|NotFound|404' -or $message -match 'Request_ResourceNotFound|NotFound|404|does not exist')
+}
+
+function ConvertTo-AdminlessDisplayName {
+    param([AllowEmptyString()] [string]$DisplayName)
+
+    $cleanName = ([string]$DisplayName) -replace '\s*\(Admin\)\s*', ' '
+    $cleanName = $cleanName -replace '\s+', ' '
+    return $cleanName.Trim()
+}
+
+function Find-MgUserByDisplayName {
+    param([Parameter(Mandatory = $true)] [string]$DisplayName)
+
+    $escapedDisplayName = $DisplayName -replace "'", "''"
+    $filter = "displayName eq '$escapedDisplayName'"
+    return @(Get-MgUser -Filter $filter -Property 'id,displayName,userPrincipalName,onPremisesImmutableId' -All -ErrorAction Stop)
+}
+
+function Get-DisplayNameFallbackCandidates {
+    param([AllowEmptyString()] [string]$DisplayName)
+
+    $baseDisplayName = ConvertTo-AdminlessDisplayName -DisplayName $DisplayName
+    if ([string]::IsNullOrWhiteSpace($baseDisplayName)) { return @() }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if ($baseDisplayName -notmatch '^Admin\s+') {
+        $candidates.Add("Admin $baseDisplayName") | Out-Null
+    }
+    $candidates.Add($baseDisplayName) | Out-Null
+
+    return @($candidates | Select-Object -Unique)
 }
 
 function Resolve-RolePrincipal {
@@ -160,7 +194,8 @@ function Get-UserReportRow {
         [Parameter(Mandatory = $true)] [string]$Environment,
         [Parameter(Mandatory = $true)] [string]$Prefix,
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [string]$InputUPN,
-        [Parameter(Mandatory = $true)] [object]$RoleIndex
+        [Parameter(Mandatory = $true)] [object]$RoleIndex,
+        [AllowEmptyString()] [string]$DisplayNameHint = ''
     )
 
     $errorMessages = [System.Collections.Generic.List[string]]::new()
@@ -171,29 +206,72 @@ function Get-UserReportRow {
         $errorMessages.Add($RoleIndex.EnvironmentWarnings) | Out-Null
     }
 
-    if ([string]::IsNullOrWhiteSpace($InputUPN)) {
-        $errorMessages.Add('Input UPN is blank.') | Out-Null
-        return [pscustomobject]@{
-            Environment               = $Environment
-            Prefix                    = $Prefix
-            InputUPN                  = $InputUPN
-            UserPrincipalName         = ''
-            DisplayName               = ''
-            ImmutableId               = ''
-            ActiveDirectoryRoles      = ''
-            PimEligibleDirectoryRoles = ''
-            AllDirectoryRoles         = ''
-            LicensesAssigned          = ''
-            LookupStatus              = 'Error'
-            Error                     = Join-ReportValues -Values $errorMessages
+    $user = $null
+    $lookupStatus = 'Found'
+    $upnLookupNotFound = $false
+    $displayNameFallbackError = $false
+
+    if (-not [string]::IsNullOrWhiteSpace($InputUPN)) {
+        try {
+            $user = Get-MgUser -UserId $InputUPN -Property 'id,displayName,userPrincipalName,onPremisesImmutableId' -ErrorAction Stop
+        }
+        catch {
+            $upnLookupNotFound = Test-GraphNotFoundError -ErrorRecord $_
+            $errorMessages.Add("User lookup failed for input UPN '$InputUPN': $($_.Exception.Message)") | Out-Null
+            if (-not $upnLookupNotFound) {
+                return [pscustomobject]@{
+                    Environment               = $Environment
+                    Prefix                    = $Prefix
+                    InputUPN                  = $InputUPN
+                    UserPrincipalName         = ''
+                    DisplayName               = ''
+                    ImmutableId               = ''
+                    ActiveDirectoryRoles      = ''
+                    PimEligibleDirectoryRoles = ''
+                    AllDirectoryRoles         = ''
+                    LicensesAssigned          = ''
+                    LookupStatus              = 'Error'
+                    Error                     = Join-ReportValues -Values $errorMessages
+                }
+            }
         }
     }
 
-    try {
-        $user = Get-MgUser -UserId $InputUPN -Property 'id,displayName,userPrincipalName,onPremisesImmutableId' -ErrorAction Stop
+    $fallbackDisplayName = ConvertTo-AdminlessDisplayName -DisplayName $DisplayNameHint
+    $fallbackDisplayNames = @(Get-DisplayNameFallbackCandidates -DisplayName $DisplayNameHint)
+    if (-not $user -and $fallbackDisplayNames.Count -gt 0) {
+        try {
+            foreach ($candidateDisplayName in $fallbackDisplayNames) {
+                $matches = @(Find-MgUserByDisplayName -DisplayName $candidateDisplayName)
+                if ($matches.Count -eq 1) {
+                    $user = $matches[0]
+                    $lookupStatus = 'FoundByDisplayName'
+                    $fallbackReason = if ([string]::IsNullOrWhiteSpace($InputUPN)) { 'input UPN was blank' } else { 'input UPN was not found' }
+                    $errorMessages.Add("Matched by display name '$candidateDisplayName' because $fallbackReason.") | Out-Null
+                    break
+                }
+                elseif ($matches.Count -eq 0) {
+                    $errorMessages.Add("Display name fallback found no user for '$candidateDisplayName'.") | Out-Null
+                }
+                else {
+                    $matchedUpns = Join-ReportValues -Values @($matches | ForEach-Object { $_.UserPrincipalName })
+                    $errorMessages.Add("Display name fallback for '$candidateDisplayName' matched multiple users: $matchedUpns") | Out-Null
+                    $displayNameFallbackError = $true
+                    break
+                }
+            }
+        }
+        catch {
+            $errorMessages.Add("Display name fallback failed for '$fallbackDisplayName': $($_.Exception.Message)") | Out-Null
+            $displayNameFallbackError = $true
+        }
     }
-    catch {
-        $errorMessages.Add("User lookup failed: $($_.Exception.Message)") | Out-Null
+
+    if (-not $user) {
+        if ([string]::IsNullOrWhiteSpace($InputUPN) -and [string]::IsNullOrWhiteSpace($fallbackDisplayName)) {
+            $errorMessages.Add('Input UPN is blank and no display name hint is available.') | Out-Null
+        }
+
         return [pscustomobject]@{
             Environment               = $Environment
             Prefix                    = $Prefix
@@ -205,13 +283,12 @@ function Get-UserReportRow {
             PimEligibleDirectoryRoles = ''
             AllDirectoryRoles         = ''
             LicensesAssigned          = ''
-            LookupStatus              = if (Test-GraphNotFoundError -ErrorRecord $_) { 'NotFound' } else { 'Error' }
+            LookupStatus              = if ($displayNameFallbackError) { 'Error' } elseif ($upnLookupNotFound -or -not [string]::IsNullOrWhiteSpace($fallbackDisplayName)) { 'NotFound' } else { 'Error' }
             Error                     = Join-ReportValues -Values $errorMessages
         }
     }
 
     $licenses = ''
-    $lookupStatus = 'Found'
     try {
         $licenses = Join-ReportValues -Values @(Get-MgUserLicenseDetail -UserId $user.Id -ErrorAction Stop | Select-Object -ExpandProperty SkuPartNumber)
     }
@@ -251,7 +328,8 @@ function Invoke-TenantExport {
     param(
         [Parameter(Mandatory = $true)] [string]$Environment,
         [Parameter(Mandatory = $true)] [object[]]$Mappings,
-        [Parameter(Mandatory = $true)] [string]$UpnColumn
+        [Parameter(Mandatory = $true)] [string]$UpnColumn,
+        [hashtable]$DisplayNameHints = @{}
     )
 
     Write-Host "Connecting to Microsoft Graph for $Environment..." -ForegroundColor Cyan
@@ -265,11 +343,15 @@ function Invoke-TenantExport {
         foreach ($mapping in $Mappings) {
             $count++
             $upn = [string]$mapping.$UpnColumn
+            $displayNameHint = ''
+            if ($DisplayNameHints.ContainsKey([string]$mapping.Prefix)) {
+                $displayNameHint = [string]$DisplayNameHints[[string]$mapping.Prefix]
+            }
             Write-Progress -Activity "Processing $Environment admin accounts" `
                 -Status ("{0} of {1} - {2}" -f $count, $Mappings.Count, $upn) `
                 -PercentComplete (($count / $Mappings.Count) * 100)
 
-            $rows.Add((Get-UserReportRow -Environment $Environment -Prefix $mapping.Prefix -InputUPN $upn -RoleIndex $roleIndex)) | Out-Null
+            $rows.Add((Get-UserReportRow -Environment $Environment -Prefix $mapping.Prefix -InputUPN $upn -RoleIndex $roleIndex -DisplayNameHint $displayNameHint)) | Out-Null
         }
 
         Write-Progress -Activity "Processing $Environment admin accounts" -Completed
@@ -288,11 +370,20 @@ $mappings = @(Import-Csv -Path $InputCsv)
 Test-RequiredCsvColumns -Rows $mappings -RequiredColumns @('WAEUPN', 'Prefix', 'FortescueUPN')
 
 $reportRows = [System.Collections.Generic.List[object]]::new()
-$reportRows.AddRange([object[]](Invoke-TenantExport -Environment 'WAE' -Mappings $mappings -UpnColumn 'WAEUPN'))
+$waeRows = [object[]](Invoke-TenantExport -Environment 'WAE' -Mappings $mappings -UpnColumn 'WAEUPN')
+$reportRows.AddRange($waeRows)
+
+$fortescueDisplayNameHints = @{}
+foreach ($row in $waeRows) {
+    $displayNameHint = ConvertTo-AdminlessDisplayName -DisplayName $row.DisplayName
+    if (-not [string]::IsNullOrWhiteSpace($displayNameHint)) {
+        $fortescueDisplayNameHints[[string]$row.Prefix] = $displayNameHint
+    }
+}
 
 Write-Host ''
 Write-Host 'Sign in to the Fortescue tenant when prompted.' -ForegroundColor Yellow
-$reportRows.AddRange([object[]](Invoke-TenantExport -Environment 'Fortescue' -Mappings $mappings -UpnColumn 'FortescueUPN'))
+$reportRows.AddRange([object[]](Invoke-TenantExport -Environment 'Fortescue' -Mappings $mappings -UpnColumn 'FortescueUPN' -DisplayNameHints $fortescueDisplayNameHints))
 
 $columns = 'Environment','Prefix','InputUPN','UserPrincipalName','DisplayName','ImmutableId',
            'ActiveDirectoryRoles','PimEligibleDirectoryRoles','AllDirectoryRoles',

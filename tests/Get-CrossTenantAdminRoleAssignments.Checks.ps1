@@ -46,6 +46,7 @@ function Reset-GraphStub {
     $script:GraphStub = @{
         Users             = @{}
         UserFailures      = @{}
+        UserSearchResults = @{}
         LicenseFailures   = @{}
         LicenseDetails    = @{}
         RoleDefinitions   = @()
@@ -75,9 +76,18 @@ function New-StubErrorRecord {
 function Get-MgUser {
     param(
         [string]$UserId,
+        [string]$Filter,
         [string[]]$Property,
+        [switch]$All,
         [System.Management.Automation.ActionPreference]$ErrorAction
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($Filter)) {
+        if (-not $script:GraphStub.UserSearchResults.ContainsKey($Filter)) {
+            return @()
+        }
+        return @($script:GraphStub.UserSearchResults[$Filter])
+    }
 
     if ($script:GraphStub.UserFailures.ContainsKey($UserId)) {
         throw $script:GraphStub.UserFailures[$UserId]
@@ -142,7 +152,7 @@ function Get-MgGroupTransitiveMember {
 function Test-RequiredFunctionsExist {
     $ast = Get-ScriptAst
     $functionNames = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object Name)
-    foreach ($name in @('Test-RequiredCsvColumns','Join-ReportValues','Add-UserRole','Resolve-RolePrincipal','Get-TenantRoleIndex','Get-UserReportRow','Invoke-TenantExport')) {
+    foreach ($name in @('Test-RequiredCsvColumns','Join-ReportValues','Add-UserRole','Test-GraphNotFoundError','ConvertTo-AdminlessDisplayName','Find-MgUserByDisplayName','Get-DisplayNameFallbackCandidates','Resolve-RolePrincipal','Get-TenantRoleIndex','Get-UserReportRow','Invoke-TenantExport')) {
         Assert-True -Condition ($functionNames -contains $name) -Name "Function exists: $name"
     }
 }
@@ -169,6 +179,18 @@ function Test-JoinReportValues {
     Assert-True -Condition ($joined -eq 'Role A; Role B') -Name 'Join-ReportValues sorts, deduplicates, and skips blanks'
 }
 Test-JoinReportValues
+
+function Test-ConvertToAdminlessDisplayName {
+    $cleanName = ConvertTo-AdminlessDisplayName -DisplayName '  George   Merry (Admin)  '
+    Assert-True -Condition ($cleanName -eq 'George Merry') -Name 'ConvertTo-AdminlessDisplayName removes Admin marker and normalizes spaces'
+}
+Test-ConvertToAdminlessDisplayName
+
+function Test-DisplayNameFallbackCandidatesPreferAdminPrefix {
+    $candidates = @(Get-DisplayNameFallbackCandidates -DisplayName 'Amandeep Bhatoa (Admin)')
+    Assert-True -Condition ($candidates.Count -eq 2 -and $candidates[0] -eq 'Admin Amandeep Bhatoa' -and $candidates[1] -eq 'Amandeep Bhatoa') -Name 'Display name fallback candidates prefer Admin-prefixed account'
+}
+Test-DisplayNameFallbackCandidatesPreferAdminPrefix
 
 function Test-AddUserRole {
     $roleMap = @{}
@@ -255,6 +277,83 @@ function Test-BlankUpnReturnsErrorRow {
     Assert-True -Condition ($null -ne $row -and $row.LookupStatus -eq 'Error' -and $row.Error -match 'blank') -Name 'Blank UPN returns an Error row'
 }
 Test-BlankUpnReturnsErrorRow
+
+function Test-DisplayNameFallbackFindsFortescueUser {
+    Reset-GraphStub
+    $script:GraphStub.UserFailures['admgmerry@wae.com'] = New-StubErrorRecord -Message "Resource 'admgmerry@wae.com' does not exist." -ErrorId 'Request_ResourceNotFound'
+    $script:GraphStub.UserSearchResults["displayName eq 'George Merry'"] = @([pscustomobject]@{
+        Id                    = 'fortescue-user-1'
+        UserPrincipalName     = 'george.merry.a@fortescue.com'
+        DisplayName           = 'George Merry'
+        OnPremisesImmutableId = 'immutable-fortescue-1'
+    })
+    $script:GraphStub.LicenseDetails['fortescue-user-1'] = @([pscustomobject]@{ SkuPartNumber = 'M365_E5' })
+
+    $roleIndex = New-EmptyRoleIndex
+    $roleIndex.EligibleRoles['fortescue-user-1'] = [System.Collections.Generic.List[string]]::new()
+    $roleIndex.EligibleRoles['fortescue-user-1'].Add('Global Administrator (PIM Eligible)') | Out-Null
+
+    $row = Get-UserReportRow -Environment 'Fortescue' -Prefix 'admgmerry' -InputUPN 'admgmerry@wae.com' -RoleIndex $roleIndex -DisplayNameHint 'George Merry (Admin)'
+
+    Assert-True -Condition ($row.LookupStatus -eq 'FoundByDisplayName') -Name 'Display name fallback reports FoundByDisplayName'
+    Assert-True -Condition ($row.UserPrincipalName -eq 'george.merry.a@fortescue.com') -Name 'Display name fallback returns Fortescue UPN'
+    Assert-True -Condition ($row.PimEligibleDirectoryRoles -eq 'Global Administrator (PIM Eligible)') -Name 'PIM eligible roles are included for display-name match'
+}
+Test-DisplayNameFallbackFindsFortescueUser
+
+function Test-DisplayNameFallbackPrefersAdminAccountWhenBothExist {
+    Reset-GraphStub
+    $script:GraphStub.UserFailures['admabhatoa@wae.com'] = New-StubErrorRecord -Message "Resource 'admabhatoa@wae.com' does not exist." -ErrorId 'Request_ResourceNotFound'
+    $script:GraphStub.UserSearchResults["displayName eq 'Admin Amandeep Bhatoa'"] = @([pscustomobject]@{
+        Id                    = 'admin-user-1'
+        UserPrincipalName     = 'admin.amandeep.bhatoa@fortescue.com'
+        DisplayName           = 'Admin Amandeep Bhatoa'
+        OnPremisesImmutableId = 'immutable-admin-1'
+    })
+    $script:GraphStub.UserSearchResults["displayName eq 'Amandeep Bhatoa'"] = @([pscustomobject]@{
+        Id                    = 'standard-user-1'
+        UserPrincipalName     = 'amandeep.bhatoa@fortescue.com'
+        DisplayName           = 'Amandeep Bhatoa'
+        OnPremisesImmutableId = 'immutable-standard-1'
+    })
+
+    $row = Get-UserReportRow -Environment 'Fortescue' -Prefix 'admabhatoa' -InputUPN 'admabhatoa@wae.com' -RoleIndex (New-EmptyRoleIndex) -DisplayNameHint 'Amandeep Bhatoa (Admin)'
+
+    Assert-True -Condition ($row.UserPrincipalName -eq 'admin.amandeep.bhatoa@fortescue.com') -Name 'Display name fallback prefers Fortescue Admin-prefixed account'
+    Assert-True -Condition ($row.DisplayName -eq 'Admin Amandeep Bhatoa') -Name 'Display name fallback returns Admin-prefixed display name'
+}
+Test-DisplayNameFallbackPrefersAdminAccountWhenBothExist
+
+function Test-DisplayNameFallbackRejectsAmbiguousMatches {
+    Reset-GraphStub
+    $script:GraphStub.UserFailures['admgmerry@wae.com'] = New-StubErrorRecord -Message "Resource 'admgmerry@wae.com' does not exist." -ErrorId 'Request_ResourceNotFound'
+    $script:GraphStub.UserSearchResults["displayName eq 'George Merry'"] = @(
+        [pscustomobject]@{ Id = 'user-1'; UserPrincipalName = 'george.merry.a@fortescue.com'; DisplayName = 'George Merry'; OnPremisesImmutableId = 'immutable-1' },
+        [pscustomobject]@{ Id = 'user-2'; UserPrincipalName = 'george.merry.b@fortescue.com'; DisplayName = 'George Merry'; OnPremisesImmutableId = 'immutable-2' }
+    )
+
+    $row = Get-UserReportRow -Environment 'Fortescue' -Prefix 'admgmerry' -InputUPN 'admgmerry@wae.com' -RoleIndex (New-EmptyRoleIndex) -DisplayNameHint 'George Merry (Admin)'
+
+    Assert-True -Condition ($row.LookupStatus -eq 'Error') -Name 'Ambiguous display name fallback is an Error'
+    Assert-True -Condition ($row.Error -match 'matched multiple users') -Name 'Ambiguous display name fallback is reported'
+}
+Test-DisplayNameFallbackRejectsAmbiguousMatches
+
+function Test-RoleIndexIncludesDirectPimEligibleRoles {
+    Reset-GraphStub
+    $script:GraphStub.RoleDefinitions = @([pscustomobject]@{ Id = 'role-eligible'; DisplayName = 'Privileged Role Administrator' })
+    $script:GraphStub.EligibleAssignments = @([pscustomobject]@{ RoleDefinitionId = 'role-eligible'; PrincipalId = 'user-eligible' })
+    $script:GraphStub.DirectoryObjects['user-eligible'] = [pscustomobject]@{
+        Id = 'user-eligible'
+        AdditionalProperties = @{ '@odata.type' = '#microsoft.graph.user' }
+    }
+
+    $roleIndex = Get-TenantRoleIndex
+
+    Assert-True -Condition ($roleIndex.EligibleRoles.ContainsKey('user-eligible')) -Name 'Role index captures direct PIM eligible user assignment'
+    Assert-True -Condition ($roleIndex.EligibleRoles['user-eligible'][0] -eq 'Privileged Role Administrator (PIM Eligible)') -Name 'Role index labels PIM eligible user assignment'
+}
+Test-RoleIndexIncludesDirectPimEligibleRoles
 
 function Test-GroupExpansionWarningIsCapturedAndPropagated {
     Reset-GraphStub
