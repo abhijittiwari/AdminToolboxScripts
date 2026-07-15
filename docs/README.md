@@ -22,6 +22,8 @@ This directory contains user-facing documentation for the scripts in this reposi
 | `Export-ExchangeFullAccessPermissions.ps1` | Modular job: FullAccess mailbox permissions for an `Objects.csv` inventory. |
 | `Export-ExchangeObjectDataWorkbook.ps1` | Collates export CSVs into one Excel workbook via ImportExcel (offline; Excel not required). |
 | `Get-EntraAdminAccounts.ps1` | Entra ID administrator account and role assignment reporting. |
+| `Get-EntraAdminMailboxInventory.ps1` | Focused admin mailbox/license inventory including active and PIM-eligible directory role assignments. |
+| `Get-CrossTenantUserMapping.ps1` | Maps source tenant users to target tenant accounts via synced on-premises extension attributes 13/14 containing the source UPN. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | On-prem Active Directory duplicate mail/proxy address detection. |
 | `Get-MailDnsRecords.ps1` | Windows PowerShell MX, SPF, DMARC, and DKIM lookup. |
 | `get-mail-dns-records.sh` | macOS/Linux MX, SPF, DMARC, and DKIM lookup using `dig`. |

@@ -21,8 +21,12 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Invoke-ExchangeObjectDataExport.ps1` | PowerShell | Runs all five modular export jobs in sequence: inventory, memberships, SendAs, FullAccess, workbook. |
 | `Export-ExchangeMigrationReadiness.ps1` | PowerShell | Identifies mail objects blocked, risky, or unsuitable for migration due to holds, retention, licensing, or compliance constraints. |
 | `Export-DomainCutoverAssessment.ps1` | PowerShell | Assesses an accepted domain ahead of a tenant-to-tenant cutover: accepted-domain config, MX/SPF/DKIM DNS, and shared mailbox domain usage with hold status. |
+| `Export-TenantDomainDependencyInventory.ps1` | PowerShell | Inventories groups, shared/resource mailboxes, routing, moderation, permissions, and address rewrite dependencies on a target domain such as `wae.com`. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
+| `Get-EntraAdminMailboxInventory.ps1` | PowerShell | Exports Entra ID admin users, including active and PIM-eligible role assignments, with mailbox presence, Exchange GUID, license SKU names, and mailbox type. |
+| `Get-EntraDirSyncProtectionSettings.ps1` | PowerShell | Checks Microsoft Graph directory synchronization protection flags for hard-match cloud object takeover and soft match. |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
+| `Get-CrossTenantUserMapping.ps1` | PowerShell | Exports all users from a source tenant, then matches each one to a target tenant account whose synced on-premises `extensionAttribute13` or `extensionAttribute14` contains the source UPN. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
@@ -250,6 +254,55 @@ Assesses an accepted domain ahead of a tenant-to-tenant domain cutover. Confirms
 | `CutoverImpactSummary.csv` | Headline metrics (domain type, MX/EOP status, third-party SPF senders, hold counts). |
 | `Errors-DomainCutover.csv` | Lookup failures. Headers-only means no errors. |
 
+## Export-TenantDomainDependencyInventory.ps1
+
+Inventories tenant resources that depend on a target SMTP domain such as `wae.com`. It scans distribution lists, mail-enabled security groups, dynamic distribution groups, Microsoft 365 groups, shared mailboxes, room/equipment mailboxes, mailbox permissions, moderation and sender restrictions, forwarding/routing properties, resource delegates, and address rewrite entries.
+
+### Requirements
+
+- PowerShell 7 recommended.
+- ExchangeOnlineManagement module: `Install-Module ExchangeOnlineManagement`.
+- Microsoft.Graph.Authentication module for Microsoft 365 group owner/member fallback when `Get-UnifiedGroupLinks` fails.
+- Exchange Online read access for recipients, groups, mailboxes, permissions, calendar processing, and address rewrite entries.
+- Microsoft Graph delegated scopes for fallback: `Group.Read.All`, `GroupMember.Read.All`, and `User.Read.All`.
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-Domain` | String | Domain to inventory. Defaults to `wae.com`. |
+| `-OutputFolder` | String | Destination folder. Defaults to `./TenantDomainDependencyInventory_<timestamp>`. |
+| `-IncludeAll` | Switch | Include all scoped objects, not just objects with target-domain dependencies. |
+| `-SkipMemberExpansion` | Switch | Skip group member expansion for very large tenants. |
+| `-SkipAddressRewriteRules` | Switch | Skip `Get-AddressRewriteEntry`. |
+
+### Usage
+
+```powershell
+./Export-TenantDomainDependencyInventory.ps1 -Domain wae.com
+```
+
+```powershell
+./Export-TenantDomainDependencyInventory.ps1 -Domain wae.com -OutputFolder ./WaeDependencyInventory -SkipMemberExpansion
+```
+
+### Output Files
+
+| File | Contents |
+| --- | --- |
+| `DomainDependencyInventory.csv` | Impacted groups, shared/resource mailboxes, owners, aliases/proxies, member samples, sender restrictions, moderation, forwarding/routing, permissions, recommended disposition, and testing/comms needs. |
+| `AddressRewriteRules.csv` | Address rewrite entries referencing the target domain when the cmdlet is available. |
+| `Summary.csv` | Counts by action category. |
+| `Errors-DomainDependencyInventory.csv` | Recoverable lookup failures. |
+
+### Notes
+
+- Default output includes only objects with a target-domain dependency; use `-IncludeAll` for a full scoped inventory.
+- If `Get-UnifiedGroupLinks` fails with the Exchange Online `GetResponseHeader` error, the script falls back to Microsoft Graph for Microsoft 365 group owners/members.
+- `RecommendedDisposition` flags `Migration`, `Reconfiguration`, `OwnerDecision`, or `ExclusionCandidate`.
+- `TestingAndCommsNeeds` identifies downstream delivery, membership, moderation, booking, external sender, rewrite, and owner communication needs.
+- The script is read-only and leaves the Exchange Online session open for follow-up checks.
+
 ## Get-EntraAdminAccounts.ps1
 
 Reports all Entra ID user accounts with directory admin access. The report includes active role assignments, PIM-eligible role assignments, role-assignable group membership expansion, license details, MFA registration, mailbox information, group memberships, account status, created date, and last sign-in activity.
@@ -316,6 +369,87 @@ The script exports a CSV and prints a console summary table. CSV columns include
 - If MFA registration details cannot be retrieved for a user, the script writes a warning and leaves `MfaRegistered` as `Unknown` with blank method fields.
 - The script disconnects from Microsoft Graph and Exchange Online at the end of execution.
 
+## Get-EntraAdminMailboxInventory.ps1
+
+Exports a focused CSV of Entra ID administrator users and mailbox status. It includes active directory role assignments, PIM-eligible directory role assignments, and users assigned through role-assignable groups. Service principals are excluded.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK: `Install-Module Microsoft.Graph`.
+- ExchangeOnlineManagement module: `Install-Module ExchangeOnlineManagement`.
+- Microsoft Graph permissions:
+  - `Directory.Read.All`
+  - `RoleManagement.Read.Directory`
+  - `User.Read.All`
+- Exchange Online read access to run `Get-EXOMailbox`.
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-OutputPath` | String | CSV output path. Defaults to `./EntraAdminMailboxInventory_<timestamp>.csv`. |
+
+### Usage
+
+```powershell
+./Get-EntraAdminMailboxInventory.ps1
+```
+
+```powershell
+./Get-EntraAdminMailboxInventory.ps1 -OutputPath ./AdminMailboxInventory.csv
+```
+
+### Output
+
+The CSV columns are:
+
+- `DisplayName`
+- `UserPrincipalName`
+- `HasMailbox`
+- `ExchangeGuid`
+- `LicenseName`
+- `MailboxType`
+
+### Notes
+
+- `LicenseName` contains semicolon-joined Microsoft Graph `SkuPartNumber` values.
+- `HasMailbox=False` means `Get-EXOMailbox` did not find a mailbox for the admin UPN.
+- PIM eligibility collection may warn or skip if the tenant lacks Entra ID P2 or the signed-in account lacks permission.
+
+## Get-EntraDirSyncProtectionSettings.ps1
+
+Checks the tenant-level Entra ID directory synchronization protection flags exposed by Microsoft Graph v1.0 at `/directory/onPremisesSynchronization`: `blockCloudObjectTakeoverThroughHardMatchEnabled` and `blockSoftMatchEnabled`. The script is read-only and does not use the MSOnline module.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK authentication module: `Install-Module Microsoft.Graph.Authentication`.
+- Signed-in account must be Global Administrator for this Graph operation.
+- Microsoft Graph permission:
+  - `OnPremDirectorySynchronization.Read.All`
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-OutputPath` | String | Optional CSV output path. If omitted, results are printed only. |
+
+### Usage
+
+```powershell
+./Get-EntraDirSyncProtectionSettings.ps1
+```
+
+```powershell
+./Get-EntraDirSyncProtectionSettings.ps1 -OutputPath ./DirSyncProtectionSettings.csv
+```
+
+### Notes
+
+- `RecommendedState` is `Enabled` for both settings.
+- `Status=Unknown` means Graph did not return the property in the `features` payload.
+
 ## Get-CrossTenantAdminRoleAssignments.ps1
 
 Exports WAE and Fortescue admin account details from Microsoft Graph using a mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN` columns. The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors. If a Fortescue UPN is missing or cannot be found, the script strips `(Admin)` from the matching WAE display name and tries exact Fortescue `displayName` lookups for `Admin <name>` first, then `<name>`.
@@ -353,6 +487,44 @@ Exports WAE and Fortescue admin account details from Microsoft Graph using a map
 - If PIM eligibility cannot be read, active roles are still exported and the PIM warning is included in the `Error` column.
 - Fortescue rows resolved by display-name fallback use `LookupStatus=FoundByDisplayName`; ambiguous display-name matches are not guessed.
 - Missing users are exported with `LookupStatus=NotFound`.
+
+## Get-CrossTenantUserMapping.ps1
+
+Exports all users from a source tenant, then connects to a target tenant and finds each source user's corresponding account by matching the source user principal name against the on-premises synced `extensionAttribute13` and `extensionAttribute14` values on target users. Matching is case-insensitive; an exact attribute value match is tried first, then a fallback scan for attribute values that contain the source UPN inside surrounding text. Multiple candidates are reported as `MatchStatus=Ambiguous` rather than guessed. The script is read-only.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK: `Install-Module Microsoft.Graph.Users` (and `Microsoft.Graph.Authentication`).
+- Recommended Entra role: Global Reader or equivalent in each tenant.
+- Microsoft Graph permission in both tenants:
+  - `User.Read.All`
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-SourceTenantId` | String | Optional source tenant ID or domain, forces `Connect-MgGraph` to the correct tenant. |
+| `-TargetTenantId` | String | Optional target tenant ID or domain, forces `Connect-MgGraph` to the correct tenant. |
+| `-IncludeGuests` | Switch | Include guest users on both sides. Defaults to `userType=Member` accounts only. |
+| `-OutputPath` | String | CSV output path. Defaults to `./CrossTenantUserMapping_yyyyMMdd_HHmmss.csv`. |
+
+### Usage
+
+```powershell
+./Get-CrossTenantUserMapping.ps1
+```
+
+```powershell
+./Get-CrossTenantUserMapping.ps1 -SourceTenantId contoso.onmicrosoft.com -TargetTenantId fabrikam.onmicrosoft.com -OutputPath ./Contoso-Fabrikam-UserMapping.csv
+```
+
+### Notes
+
+- The script connects to Microsoft Graph once for the source tenant and once for the target tenant; sign into the requested tenant at each prompt.
+- Each source user row reports `MatchStatus` (`Matched`, `Ambiguous`, or `NotFound`), `MatchType` (`Exact` or `Contains`), the matched attribute(s), and the target account UPN, display name, object ID, enabled state, sync state, and both extension attribute values.
+- A target user whose 13 and 14 attributes both hold the same UPN is collapsed into a single match listing both attributes.
+- Ambiguous rows join all candidate target values with `; ` so they can be reviewed manually.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
@@ -564,7 +736,7 @@ Console output is grouped into sections:
 
 ## General Safety Notes
 
-- `Get-EntraAdminAccounts.ps1` reads Microsoft Graph and optionally Exchange Online data, then exports a CSV.
+- `Get-EntraAdminAccounts.ps1` and `Get-EntraAdminMailboxInventory.ps1` read Microsoft Graph and Exchange Online data, then export CSV reports.
 - `Find-ADDuplicateEmailProxyAddresses.ps1` is read-only against Active Directory and exports CSV reports.
 - DNS scripts perform read-only DNS lookups.
 - Review exported CSVs before sharing because they may contain user account identifiers, role assignments, group memberships, and mailbox information.
