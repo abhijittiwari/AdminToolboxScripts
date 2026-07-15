@@ -273,6 +273,10 @@ function Get-SharedMailboxUsageRows {
         }
 
         $readiness = $readinessByIdentity[$identity]
+        # HasArchive/ArchiveState only exist in readiness CSVs generated after the
+        # archive check was added; tolerate older exports.
+        $hasArchive = if ($readiness -and $null -ne $readiness.PSObject.Properties['HasArchive']) { [string]$readiness.HasArchive } else { '' }
+        $archiveState = if ($readiness -and $null -ne $readiness.PSObject.Properties['ArchiveState']) { [string]$readiness.ArchiveState } else { '' }
 
         $rows.Add([pscustomobject]@{
             Identity                = $identity
@@ -285,6 +289,8 @@ function Get-SharedMailboxUsageRows {
             LitigationHold          = if ($readiness) { [string]$readiness.LitigationHold } else { '' }
             ComplianceHolds         = if ($readiness) { [string]$readiness.ComplianceHolds } else { '' }
             RetentionPolicy         = if ($readiness) { [string]$readiness.RetentionPolicy } else { '' }
+            HasArchive              = $hasArchive
+            ArchiveState            = $archiveState
             MigrationStatus         = if ($readiness) { [string]$readiness.MigrationStatus } else { '' }
             BlockingReasons         = if ($readiness) { [string]$readiness.BlockingReasons } else { '' }
         }) | Out-Null
@@ -371,12 +377,13 @@ $summaryRows = @(
     [pscustomobject]@{ Metric = 'SharedMailboxesWithTargetDomainPrimary'; Value = [string]@($usageRows | Where-Object { $_.PrimaryUsesTargetDomain }).Count }
     [pscustomobject]@{ Metric = 'SharedMailboxesWithTargetDomainAlias'; Value = [string]@($usageRows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.TargetDomainAliases) }).Count }
     [pscustomobject]@{ Metric = 'SharedMailboxesWithHolds'; Value = [string]$holdCount }
+    [pscustomobject]@{ Metric = 'SharedMailboxesWithArchives'; Value = [string]@($usageRows | Where-Object { $_.HasArchive -eq 'True' }).Count }
     [pscustomobject]@{ Metric = 'SharedMailboxesBlocked'; Value = [string]@($usageRows | Where-Object { $_.MigrationStatus -eq 'Blocked' }).Count }
 )
 
 Export-CsvWithHeaders -Rows $acceptedDomainRows -Path (Join-Path $resolvedOutputFolder 'AcceptedDomains.csv') -Headers @('DomainName', 'DomainType', 'Default', 'InitialDomain', 'MatchSubDomains', 'PendingRemoval', 'WhenCreated', 'IsTargetDomain')
 Export-CsvWithHeaders -Rows $dnsRows -Path (Join-Path $resolvedOutputFolder 'DnsRecords.csv') -Headers @('Domain', 'RecordType', 'Query', 'Value', 'Assessment')
-Export-CsvWithHeaders -Rows $usageRows -Path (Join-Path $resolvedOutputFolder 'SharedMailboxDomainUsage.csv') -Headers @('Identity', 'DisplayName', 'PrimarySmtpAddress', 'PrimarySmtpDomain', 'PrimaryUsesTargetDomain', 'TargetDomainAliases', 'OtherDomainAliases', 'LitigationHold', 'ComplianceHolds', 'RetentionPolicy', 'MigrationStatus', 'BlockingReasons')
+Export-CsvWithHeaders -Rows $usageRows -Path (Join-Path $resolvedOutputFolder 'SharedMailboxDomainUsage.csv') -Headers @('Identity', 'DisplayName', 'PrimarySmtpAddress', 'PrimarySmtpDomain', 'PrimaryUsesTargetDomain', 'TargetDomainAliases', 'OtherDomainAliases', 'LitigationHold', 'ComplianceHolds', 'RetentionPolicy', 'HasArchive', 'ArchiveState', 'MigrationStatus', 'BlockingReasons')
 Export-CsvWithHeaders -Rows $summaryRows -Path (Join-Path $resolvedOutputFolder 'CutoverImpactSummary.csv') -Headers @('Metric', 'Value')
 Export-CsvWithHeaders -Rows @($script:Errors) -Path (Join-Path $resolvedOutputFolder 'Errors-DomainCutover.csv') -Headers @('Identity', 'Stage', 'Operation', 'Message')
 

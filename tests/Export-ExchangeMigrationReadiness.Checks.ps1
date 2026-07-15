@@ -98,6 +98,18 @@ function Test-MigrationStatusLogic {
     # User mailboxes still block on missing license.
     $row = Invoke-MigrationReadinessCheck -Identity 'user11' -DisplayName 'User Eleven' -RecipientType 'UserMailbox' -MailboxType 'UserMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $false
     Assert-True -Condition ($row.MigrationStatus -eq 'Blocked' -and $row.BlockingReasons -match 'no license') -Name 'Invoke-MigrationReadinessCheck still blocks unlicensed user mailboxes'
+
+    # An online archive marks the mailbox for review (conversion deletes archives).
+    $row = Invoke-MigrationReadinessCheck -Identity 'arch1' -DisplayName 'Archive One' -RecipientType 'UserMailbox' -MailboxType 'SharedMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true -HasArchive $true -ArchiveState 'HostedProvisioned'
+    Assert-True -Condition ($row.MigrationStatus -eq 'Review' -and $row.BlockingReasons -match 'online archive' -and $row.ArchiveState -eq 'HostedProvisioned') -Name 'Invoke-MigrationReadinessCheck marks archive-bearing mailboxes for review'
+
+    # An archive does not downgrade a Blocked status, but the reason is recorded.
+    $row = Invoke-MigrationReadinessCheck -Identity 'arch2' -DisplayName 'Archive Two' -RecipientType 'UserMailbox' -MailboxType 'SharedMailbox' -LitigationHold $true -RetentionPolicy $null -ComplianceHolds @() -Licensing $true -HasArchive $true
+    Assert-True -Condition ($row.MigrationStatus -eq 'Blocked' -and $row.BlockingReasons -match 'online archive' -and $row.BlockingReasons -match 'litigation hold') -Name 'Invoke-MigrationReadinessCheck keeps Blocked status and records archive reason'
+
+    # No archive leaves the mailbox Ready.
+    $row = Invoke-MigrationReadinessCheck -Identity 'arch3' -DisplayName 'Archive Three' -RecipientType 'UserMailbox' -MailboxType 'SharedMailbox' -LitigationHold $false -RetentionPolicy $null -ComplianceHolds @() -Licensing $true -HasArchive $false
+    Assert-True -Condition ($row.MigrationStatus -eq 'Ready' -and $row.HasArchive -eq $false) -Name 'Invoke-MigrationReadinessCheck leaves archive-free mailboxes Ready'
 }
 Test-MigrationStatusLogic
 
@@ -115,7 +127,7 @@ function Test-ScriptStaticContract {
     $propertiesMatch = [regex]::Match($scriptText, 'Get-EXOMailbox[^\r\n]*-Properties\s+([^\r\n]+)')
     Assert-True -Condition $propertiesMatch.Success -Name 'Script requests explicit Get-EXOMailbox properties'
     $requestedProperties = @($propertiesMatch.Groups[1].Value -split ',' | ForEach-Object { ($_.Trim() -split '\s')[0] } | Where-Object { $_ })
-    $validProperties = @('LitigationHoldEnabled', 'RetentionPolicy', 'InPlaceHolds')
+    $validProperties = @('LitigationHoldEnabled', 'RetentionPolicy', 'InPlaceHolds', 'ArchiveGuid', 'ArchiveState')
     $invalidRequested = @($requestedProperties | Where-Object { $_ -notin $validProperties })
     Assert-True -Condition ($invalidRequested.Count -eq 0) -Name "Script requests only valid mailbox properties (found: $($requestedProperties -join ', '))"
     Assert-True -Condition ('LitigationHoldEnabled' -in $requestedProperties) -Name 'Script requests LitigationHoldEnabled (not the invalid LitigationHold)'
@@ -124,6 +136,7 @@ function Test-ScriptStaticContract {
     # output omits license properties, so the raw endpoint must be used.
     Assert-True -Condition ($scriptText -match 'licenseDetails') -Name 'Script reads license names from the Graph licenseDetails endpoint'
     Assert-True -Condition ($scriptText -match "'Licenses'") -Name 'Script exports a Licenses column'
+    Assert-True -Condition ($scriptText -match "'HasArchive'" -and $scriptText -match "'ArchiveState'") -Name 'Script exports HasArchive and ArchiveState columns'
 
     # Graph must connect before Exchange: both modules bundle Microsoft.Identity.Client
     # and the Exchange module's older copy breaks Connect-MgGraph if it loads first.

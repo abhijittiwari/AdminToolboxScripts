@@ -91,6 +91,17 @@ function Test-SharedMailboxUsage {
     $sm2 = $rows | Where-Object { $_.Identity -eq 'sm2' }
     Assert-True -Condition ($sm2.PrimaryUsesTargetDomain -eq $false -and $sm2.TargetDomainAliases -eq 'two@wae.com') -Name 'Get-SharedMailboxUsageRows captures target-domain aliases'
     Assert-True -Condition ($sm2.OtherDomainAliases -eq 'two@tenant.onmicrosoft.com') -Name 'Get-SharedMailboxUsageRows keeps non-target smtp aliases and drops X500'
+
+    # Readiness rows without archive columns (older exports) must not fail.
+    Assert-True -Condition ($sm1.HasArchive -eq '' -and $sm1.ArchiveState -eq '') -Name 'Get-SharedMailboxUsageRows tolerates readiness CSVs without archive columns'
+
+    # Archive columns pass through when present.
+    $readinessWithArchive = @(
+        [pscustomobject]@{ Identity = 'sm1'; LitigationHold = 'False'; ComplianceHolds = ''; RetentionPolicy = ''; HasArchive = 'True'; ArchiveState = 'HostedProvisioned'; MigrationStatus = 'Review'; BlockingReasons = 'online archive (resolve before MailUser conversion)' }
+    )
+    $rows = @(Get-SharedMailboxUsageRows -TargetDomain 'wae.com' -Objects $objects -ProxyRows $proxies -ReadinessRows $readinessWithArchive)
+    $sm1a = $rows | Where-Object { $_.Identity -eq 'sm1' }
+    Assert-True -Condition ($sm1a.HasArchive -eq 'True' -and $sm1a.ArchiveState -eq 'HostedProvisioned') -Name 'Get-SharedMailboxUsageRows passes archive columns through'
 }
 Test-SharedMailboxUsage
 

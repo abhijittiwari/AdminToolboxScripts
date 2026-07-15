@@ -126,7 +126,9 @@ function Invoke-MigrationReadinessCheck {
         [string]$RetentionPolicy,
         [object[]]$ComplianceHolds,
         [bool]$Licensing,
-        [string[]]$Licenses = @()
+        [string[]]$Licenses = @(),
+        [bool]$HasArchive = $false,
+        [string]$ArchiveState = ''
     )
 
     # An empty pipeline binds as $null, which @() would wrap into a one-element
@@ -174,6 +176,13 @@ function Invoke-MigrationReadinessCheck {
         }
     }
 
+    # Converting a mailbox to a MailUser deletes the mailbox AND its online
+    # archive, so an archive must be migrated or exported before conversion.
+    if ($HasArchive) {
+        $blockers += 'online archive (resolve before MailUser conversion)'
+        if ($status -ne 'Blocked') { $status = 'Review' }
+    }
+
     [pscustomobject]@{
         Identity           = $Identity
         DisplayName        = $DisplayName
@@ -184,6 +193,8 @@ function Invoke-MigrationReadinessCheck {
         ComplianceHolds    = @($ComplianceHolds) -join '; '
         Licensing          = $Licensing
         Licenses           = @($Licenses) -join '; '
+        HasArchive         = $HasArchive
+        ArchiveState       = $ArchiveState
         MigrationStatus    = $status
         BlockingReasons    = $blockers -join '; '
         HasErrors          = $false
@@ -264,10 +275,13 @@ foreach ($recipient in $recipients) {
             $lookupMethod = 'Identity'
         }
 
-        $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHoldEnabled, RetentionPolicy, InPlaceHolds
+        $mailbox = Get-EXOMailbox -Identity $lookupIdentity -ErrorAction Stop -Properties LitigationHoldEnabled, RetentionPolicy, InPlaceHolds, ArchiveGuid, ArchiveState
         $litigationHold = [bool]$mailbox.LitigationHoldEnabled
         $retentionPolicy = [string]$mailbox.RetentionPolicy
         $complianceHolds = @(@($mailbox.InPlaceHolds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $archiveGuid = [string]$mailbox.ArchiveGuid
+        $hasArchive = (-not [string]::IsNullOrWhiteSpace($archiveGuid)) -and $archiveGuid -ne '00000000-0000-0000-0000-000000000000'
+        $archiveState = [string]$mailbox.ArchiveState
 
         $hasLicense = $true
         $licenseNames = @()
@@ -290,7 +304,7 @@ foreach ($recipient in $recipients) {
         }
 
         $mailboxType = [string]$mailbox.RecipientTypeDetails
-        $row = Invoke-MigrationReadinessCheck -Identity ([string]$recipient.Identity) -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense -Licenses $licenseNames
+        $row = Invoke-MigrationReadinessCheck -Identity ([string]$recipient.Identity) -DisplayName ([string]$recipient.DisplayName) -RecipientType ([string]$recipient.RecipientType) -MailboxType $mailboxType -LitigationHold $litigationHold -RetentionPolicy $retentionPolicy -ComplianceHolds $complianceHolds -Licensing $hasLicense -Licenses $licenseNames -HasArchive $hasArchive -ArchiveState $archiveState
         $readinessRows.Add($row) | Out-Null
     }
     catch {
@@ -301,7 +315,7 @@ Write-Progress -Id 1 -Completed
 
 $blockedRows = @($readinessRows | Where-Object { $_.MigrationStatus -eq 'Blocked' })
 
-Export-CsvWithHeaders -Rows @($readinessRows) -Path (Join-Path $resolvedOutputFolder 'MigrationReadiness.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'LitigationHold', 'RetentionPolicy', 'ComplianceHolds', 'Licensing', 'Licenses', 'MigrationStatus', 'BlockingReasons', 'HasErrors')
+Export-CsvWithHeaders -Rows @($readinessRows) -Path (Join-Path $resolvedOutputFolder 'MigrationReadiness.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'LitigationHold', 'RetentionPolicy', 'ComplianceHolds', 'Licensing', 'Licenses', 'HasArchive', 'ArchiveState', 'MigrationStatus', 'BlockingReasons', 'HasErrors')
 Export-CsvWithHeaders -Rows $blockedRows -Path (Join-Path $resolvedOutputFolder 'BlockedObjects.csv') -Headers @('Identity', 'DisplayName', 'RecipientType', 'MailboxType', 'Licenses', 'MigrationStatus', 'BlockingReasons')
 Export-CsvWithHeaders -Rows @($script:Errors) -Path (Join-Path $resolvedOutputFolder 'Errors-MigrationReadiness.csv') -Headers @('Identity', 'Stage', 'Operation', 'Message')
 

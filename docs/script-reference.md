@@ -166,9 +166,9 @@ Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risk
 
 | Status | Triggered By |
 | --- | --- |
-| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned. |
+| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned to a mailbox type that requires one. |
 | `Risky` | A retention policy is assigned (and nothing blocks the mailbox). |
-| `Review` | Mailbox type is `DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, or `LinkedRoomMailbox`. |
+| `Review` | Mailbox type is `DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, or `LinkedRoomMailbox`, or an online archive is present (`HasArchive`/`ArchiveState` columns) - converting a mailbox to a MailUser deletes its archive, so archives must be migrated or exported first. |
 | `Ready` | None of the above. |
 
 ### Examples
@@ -189,7 +189,7 @@ Assesses mailboxes for migration readiness and classifies each as `Ready`, `Risk
 
 | File | Contents |
 | --- | --- |
-| `MigrationReadiness.csv` | One row per assessed object: identity, display name, recipient and mailbox type, hold and retention details, licensing, `Licenses` (semicolon-joined SKU names, for example `EMS; SPE_E5`), `MigrationStatus`, and `BlockingReasons`. |
+| `MigrationReadiness.csv` | One row per assessed object: identity, display name, recipient and mailbox type, hold and retention details, licensing, `Licenses` (semicolon-joined SKU names, for example `EMS; SPE_E5`), `HasArchive`/`ArchiveState`, `MigrationStatus`, and `BlockingReasons`. |
 | `BlockedObjects.csv` | The subset with `MigrationStatus = Blocked`, including `Licenses`. |
 | `Errors-MigrationReadiness.csv` | Objects that could not be assessed. Headers-only means no errors. |
 
@@ -246,7 +246,7 @@ Assesses an accepted domain ahead of a tenant-to-tenant domain cutover: accepted
 | --- | --- |
 | `AcceptedDomains.csv` | All accepted domains with an `IsTargetDomain` flag. |
 | `DnsRecords.csv` | MX, SPF, Autodiscover, and DKIM records, each with an assessment (EOP routing, third-party senders, tenant-bound DKIM). |
-| `SharedMailboxDomainUsage.csv` | One row per shared mailbox: primary domain, target-domain aliases, other aliases, hold and readiness status. |
+| `SharedMailboxDomainUsage.csv` | One row per shared mailbox: primary domain, target-domain aliases, other aliases, hold, archive (`HasArchive`/`ArchiveState`), and readiness status. |
 | `CutoverImpactSummary.csv` | Metric/value pairs: domain type, default flag, MX/EOP status, SPF third parties, shared mailbox and hold counts. |
 | `Errors-DomainCutover.csv` | Lookup failures. Headers-only means no errors. |
 
@@ -541,6 +541,53 @@ Writes one CSV row per source user: source UPN, display name, object ID, and ena
 - Review every `Ambiguous` row manually before using the mapping for migration.
 - Confirm `NotFound` rows are expected (not-yet-provisioned or intentionally excluded accounts).
 - Matching is case-insensitive and trims whitespace; a stale attribute value still matches, so verify recently renamed source UPNs separately.
+
+## Export-AdminCaPimPosture.ps1
+
+Maps Conditional Access policy applicability and PIM-eligible directory roles for in-scope admins into one Excel workbook.
+
+### Common Uses
+
+- Assess CA / PIM posture for admins ahead of a migration or security review.
+- Find admins with no enabled Conditional Access policy applying to them.
+- Find admins not covered by an MFA-requiring enabled CA policy.
+- Surface admins explicitly excluded from CA policies.
+- List role-scoped CA policies that only apply once a PIM-eligible role is activated.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK and ImportExcel (`Install-Module ImportExcel -Scope CurrentUser`).
+- Recommended role: Global Reader or Security Reader.
+- Graph permissions: `Policy.Read.All`, `RoleManagement.Read.Directory`, `Directory.Read.All`.
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `-InputCsv <path>` | Optional CSV with a `UserPrincipalName` column defining the in-scope admins. Omit to discover admins from active and PIM-eligible role assignments. |
+| `-OutputPath <path>` | Destination workbook. Defaults to `./AdminCaPimPosture_yyyyMMdd_HHmmss.xlsx`. |
+
+### Examples
+
+```powershell
+./Export-AdminCaPimPosture.ps1
+```
+
+```powershell
+./Export-AdminCaPimPosture.ps1 -InputCsv ./InScopeAdmins.csv -OutputPath ./AdminCaPimPosture.xlsx
+```
+
+### Output
+
+Writes one Excel workbook with three worksheets. `Summary` holds posture metrics (in-scope admins, CA policy count, PIM coverage, CA gaps, exclusions, lookup errors). `AdminPosture` has one row per admin: active directory roles, PIM-eligible roles (with group attribution and administrative unit scope), enabled and report-only CA policies applying, activation-only policies, exclusions, and whether any enabled applying policy requires MFA. `CaPolicyMap` has one row per admin per relevant CA policy: policy name, ID, state, applicability status (`Applies`, `Excluded`, `AppliesOnPimActivation`), MFA requirement, grant controls, and included applications.
+
+### Validation Notes
+
+- CA applicability is evaluated on user-scope conditions only (users, groups, directory roles); confirm application/platform/location conditions manually for policies that matter.
+- Spot-check a few admins against the Entra admin center's Conditional Access "What If" tool.
+- Review the `Summary` gap metrics first: admins with no enabled CA policy and admins without MFA-requiring CA are the primary posture findings.
+- If the PIM warning appears, eligible-role mapping is incomplete; re-run with an account that can read role eligibility schedules.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 

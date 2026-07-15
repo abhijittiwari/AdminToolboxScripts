@@ -27,6 +27,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Get-EntraDirSyncProtectionSettings.ps1` | PowerShell | Checks Microsoft Graph directory synchronization protection flags for hard-match cloud object takeover and soft match. |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Get-CrossTenantUserMapping.ps1` | PowerShell | Exports all users from a source tenant, then matches each one to a target tenant account whose synced on-premises `extensionAttribute13` or `extensionAttribute14` contains the source UPN. |
+| `Export-AdminCaPimPosture.ps1` | PowerShell | Maps Conditional Access policy applicability and PIM-eligible directory roles for in-scope admins into a combined Excel workbook with posture metrics. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
@@ -179,9 +180,9 @@ Assesses mailboxes for migration readiness and flags objects that are blocked, r
 
 | Status | Triggered By |
 | --- | --- |
-| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned. |
+| `Blocked` | Litigation hold enabled, in-place/compliance holds present, or (with `-IncludeLicensing`) no license assigned to a mailbox type that requires one. |
 | `Risky` | A retention policy is assigned. |
-| `Review` | Uncommon mailbox type: `DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, or `LinkedRoomMailbox`. |
+| `Review` | Uncommon mailbox type (`DiscoveryMailbox`, `LegacyMailbox`, `LinkedMailbox`, `LinkedRoomMailbox`) or an online archive is present (converting to a MailUser deletes the archive; `HasArchive`/`ArchiveState` columns identify these). |
 | `Ready` | None of the above. |
 
 ### Requirements
@@ -525,6 +526,51 @@ Exports all users from a source tenant, then connects to a target tenant and fin
 - Each source user row reports `MatchStatus` (`Matched`, `Ambiguous`, or `NotFound`), `MatchType` (`Exact` or `Contains`), the matched attribute(s), and the target account UPN, display name, object ID, enabled state, sync state, and both extension attribute values.
 - A target user whose 13 and 14 attributes both hold the same UPN is collapsed into a single match listing both attributes.
 - Ambiguous rows join all candidate target values with `; ` so they can be reviewed manually.
+
+## Export-AdminCaPimPosture.ps1
+
+Maps Conditional Access and PIM posture for in-scope admins. In-scope admins are discovered from active and PIM-eligible Entra ID directory role assignments (including assignments through role-assignable groups), or supplied explicitly via a CSV of UPNs. For each admin, every Conditional Access policy's user-scope conditions (included/excluded users, groups, and directory roles) are evaluated and reported as `Applies`, `Excluded`, `AppliesOnPimActivation`, or skipped when not in scope. The script is read-only.
+
+The output is one Excel workbook with three worksheets:
+
+- `Summary`: posture metrics such as admins with no enabled CA policy applying and admins without an MFA-requiring enabled CA policy.
+- `AdminPosture`: one row per admin with active roles, PIM-eligible roles, applying/report-only/excluded CA policies, and an MFA coverage flag.
+- `CaPolicyMap`: one row per admin per relevant CA policy with policy state, applicability status, grant controls, and included applications.
+
+### Requirements
+
+- PowerShell.
+- Microsoft Graph PowerShell SDK: `Install-Module Microsoft.Graph`.
+- ImportExcel module: `Install-Module ImportExcel -Scope CurrentUser` (Excel itself is not required).
+- Recommended Entra role: Global Reader or Security Reader.
+- Microsoft Graph permissions:
+  - `Policy.Read.All`
+  - `RoleManagement.Read.Directory`
+  - `Directory.Read.All`
+
+### Parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `-InputCsv` | String | Optional CSV with a `UserPrincipalName` column defining the in-scope admins. When omitted, admins are discovered from role assignments. |
+| `-OutputPath` | String | Excel workbook output path. Defaults to `./AdminCaPimPosture_yyyyMMdd_HHmmss.xlsx`. |
+
+### Usage
+
+```powershell
+./Export-AdminCaPimPosture.ps1
+```
+
+```powershell
+./Export-AdminCaPimPosture.ps1 -InputCsv ./InScopeAdmins.csv -OutputPath ./AdminCaPimPosture.xlsx
+```
+
+### Notes
+
+- CA applicability is evaluated against user-scope conditions only; application, platform, location, client app, and risk conditions are reported for context but not evaluated.
+- `AppliesOnPimActivation` marks role-scoped policies that only start applying once the admin activates a PIM-eligible role.
+- Policies the admin is explicitly excluded from are listed separately so exclusion gaps are visible.
+- If PIM eligibility cannot be read, active-role mapping still completes and a warning is shown.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
