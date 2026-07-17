@@ -32,6 +32,28 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
 
+## CSV Inputs at a Glance
+
+Column names each script reads from its input CSV(s). A CSV produced by the referenced upstream script always qualifies; extra columns are ignored everywhere.
+
+| Script | CSV parameter | Column names used |
+| --- | --- | --- |
+| `Export-ExchangeObjectData.ps1` | `-InputCsv` | One identity column, named by `-IdentityColumn` (default `Identity`), holding UPNs, primary SMTP addresses, aliases, or GUIDs. |
+| `Export-ExchangeObjectInventory.ps1` | `-InputCsv` | Same as above. |
+| `Invoke-ExchangeObjectDataExport.ps1` | `-InputCsv` | Same as above (passed through to the inventory job). |
+| `Export-ExchangeGroupMemberships.ps1` | `-ObjectsCsv` | `Identity`, `PrimarySmtpAddress`, `ExternalDirectoryObjectId`, `RecipientTypeDetails`, `RecipientType` |
+| `Export-ExchangeSendAsPermissions.ps1` | `-ObjectsCsv` | `Identity`, `PrimarySmtpAddress`, `RecipientTypeDetails`, `RecipientType` |
+| `Export-ExchangeFullAccessPermissions.ps1` | `-ObjectsCsv` | `Identity`, `PrimarySmtpAddress`, `RecipientTypeDetails`, `RecipientType` |
+| `Export-ExchangeObjectDataWorkbook.ps1` | `-InputFolder` | Consumes the export CSVs as written by the job scripts (`Objects.csv` mandatory; others optional). |
+| `Export-ExchangeMigrationReadiness.ps1` | `-InputCsv` | One identity column, named by `-IdentityColumn` (default `Identity`). |
+| `Export-ExchangeMigrationReadiness.ps1` | `-ObjectsCsv` | `Identity`, `DisplayName`, `RecipientType`; uses `PrimarySmtpAddress`, `ExternalDirectoryObjectId` when present. |
+| `Export-DomainCutoverAssessment.ps1` | `-ObjectsCsv` | `Identity`, `DisplayName`, `RecipientTypeDetails`, `PrimarySmtpAddress` |
+| `Export-DomainCutoverAssessment.ps1` | `-ProxyAddressesCsv` | `Identity`, `AddressType`, `ProxyAddress` |
+| `Export-DomainCutoverAssessment.ps1` | `-MigrationReadinessCsv` | `Identity`, `LitigationHold`, `ComplianceHolds`, `RetentionPolicy`, `MigrationStatus`, `BlockingReasons`; uses `HasArchive`, `ArchiveState` when present. |
+| `Export-DomainCutoverAssessment.ps1` | `-AcceptedDomainsCsv` | `DomainName`, `DomainType`, `Default`, `InitialDomain`, `MatchSubDomains`, `PendingRemoval`, `WhenCreated` |
+| `Get-CrossTenantAdminRoleAssignments.ps1` | `-InputCsv` | `Prefix` plus the two UPN columns named by `-SourceUpnColumn` / `-TargetUpnColumn` (defaults `SourceUPN` / `TargetUPN`). |
+| `Export-AdminCaPimPosture.ps1` | `-InputCsv` | `UserPrincipalName` |
+
 ## Export-ExchangeObjectData.ps1
 
 Exports Exchange Online recipient data for mailboxes by default, or for selected recipient object types. The script can process all matching recipients, multiple identities from a CSV, or a single identity. It builds a bulk recipient inventory (including proxy addresses) from Exchange Online, collects Exchange and Entra ID group memberships via Microsoft Graph `$batch` requests, gathers SendAs permissions in one org-wide sweep on `-All` runs, and looks up FullAccess permissions per mailbox by GUID, then writes normalized CSV files, a consolidated CSV, and a searchable HTML dashboard for multi-object runs.
