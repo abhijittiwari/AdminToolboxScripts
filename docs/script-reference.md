@@ -679,6 +679,87 @@ Each module writes a CSV with one row per control (per target where relevant): `
 - AD CS controls apply only where Certificate Services is present; with no CA the module emits a single not-applicable row.
 - Provide `-BaselineGpoPattern` (DJ-015), `-BreakGlassUpn` (AAD-007), `-HoneytokenNamePattern` (MON-007), and the backup runbook/restore-test dates (BR-004/BR-005) to convert those controls from Manual to an evaluated result.
 
+## Divestiture Discovery & Assessment
+
+Sixteen read-only discovery scripts plus an orchestrator gather the Discovery & Design evidence for a tenant-to-tenant / new-AD-forest divestiture across on-premises AD, hybrid identity, Microsoft 365, and on-premises Exchange. Every script only reads.
+
+### Common Uses
+
+- Build a repeatable, script-driven current-state inventory for the Discovery phase (forest topology, trusts, GPOs, populations, privileged identities, SIDHistory, dependencies, hybrid sync, on-prem Exchange, and M365 volumetrics/licensing).
+- Confirm the current authentication model (Managed PHS/PTA vs Federated/ADFS) — the SoW's #1 priority action.
+- Size the tenant-to-tenant migration (Exchange, OneDrive, SharePoint/Teams) and map target-tenant SKUs.
+- Quantify the on-premises Exchange / SMTP-relay footprint that the SoW flags as a material gap.
+
+### Modules
+
+| Script | Group | Output |
+| --- | --- | --- |
+| `Export-AdForestInventory.ps1` | On-prem AD | `Forest.csv`, `Domains.csv`, `DomainControllers.csv` |
+| `Export-AdSiteTopologyInventory.ps1` | On-prem AD | `Sites.csv`, `Subnets.csv`, `SiteLinks.csv`, `SiteConnections.csv` |
+| `Export-AdTrustInventory.ps1` | On-prem AD | single CSV of trusts |
+| `Export-AdOuGpoInventory.ps1` | On-prem AD | `OrganizationalUnits.csv`, `Gpos.csv` |
+| `Export-AdObjectPopulationInventory.ps1` | On-prem AD | `UserPopulation.csv`, `GroupPopulation.csv`, `ComputerPopulation.csv` |
+| `Export-AdPrivilegedIdentityInventory.ps1` | On-prem AD | `PrivilegedGroupMembers.csv`, `AdminCountObjects.csv`, `ServiceAccounts.csv` |
+| `Export-AdSidHistoryInventory.ps1` | On-prem AD | single CSV of SIDHistory objects |
+| `Export-AdInfraDependencyInventory.ps1` | On-prem AD | one CSV per service (DNS/DHCP/NTP/NPS/AD CS) |
+| `Export-EntraConnectConfiguration.ps1` | Hybrid identity | `GlobalSettings.csv`, `Connectors.csv`, `SyncRules.csv` (run on the sync server) |
+| `Export-EntraAuthenticationModel.ps1` | Hybrid identity | single CSV of per-domain auth (Microsoft Graph) |
+| `Export-ExchangeOnPremInventory.ps1` | On-prem Exchange | `Servers.csv`, `AcceptedDomains.csv`, `SendConnectors.csv`, `ReceiveConnectors.csv`, `Dags.csv` |
+| `Export-M365WorkloadVolumetrics.ps1` | M365 | single CSV of per-workload counts and sizes |
+| `Export-M365LicenseInventory.ps1` | M365 | `TenantSkus.csv`, `UserLicenseAssignments.csv` |
+| `Export-TeamsVoiceInventory.ps1` | M365 | `Teams.csv`, `PhoneNumbers.csv`, `VoiceApps.csv` |
+| `Export-PurviewComplianceInventory.ps1` | M365 | `SensitivityLabels.csv`, `LabelPolicies.csv`, `RetentionPolicies.csv`, `DlpPolicies.csv` |
+| `Invoke-AdDivestitureDiscovery.ps1` | Orchestrator | per-module sub-folder/CSV + `DiscoveryIndex.csv` |
+
+### Requirements
+
+- PowerShell 7+ with RSAT (`ActiveDirectory`, `GroupPolicy`, `DnsServer`, `DhcpServer`) for the on-premises modules; WinRM to the DCs for NTP collection.
+- `Export-EntraConnectConfiguration.ps1` runs on the Entra Connect sync server (`ADSync` module).
+- Cloud modules require connected sessions: Microsoft Graph, Exchange Online, SharePoint/PnP, Teams, and Security & Compliance as applicable.
+
+### Parameters
+
+| Script | Parameters |
+| --- | --- |
+| `Export-AdForestInventory.ps1` | `-Server`, `-Credential`, `-OutputFolder` |
+| `Export-AdSiteTopologyInventory.ps1` | `-Server`, `-Credential`, `-OutputFolder` |
+| `Export-AdTrustInventory.ps1` | `-Server`, `-Credential`, `-OutputPath` |
+| `Export-AdOuGpoInventory.ps1` | `-Server`, `-Credential`, `-OutputFolder` |
+| `Export-AdObjectPopulationInventory.ps1` | `-SearchBase`, `-StaleDays` (90), `-Server`, `-Credential`, `-OutputFolder` |
+| `Export-AdPrivilegedIdentityInventory.ps1` | `-PrivilegedGroup` (defaults to the tier-0/operator groups), `-StaleDays` (90), `-Server`, `-Credential`, `-OutputFolder` |
+| `Export-AdSidHistoryInventory.ps1` | `-Server`, `-Credential`, `-OutputPath` |
+| `Export-AdInfraDependencyInventory.ps1` | `-DnsServer`, `-DhcpServer`, `-NpsServer`, `-Include DNS,DHCP,NTP,NPS,ADCS`, `-Credential`, `-OutputFolder` |
+| `Export-EntraConnectConfiguration.ps1` | `-OutputFolder` |
+| `Export-EntraAuthenticationModel.ps1` | `-OutputPath` |
+| `Export-ExchangeOnPremInventory.ps1` | `-OutputFolder` |
+| `Export-M365WorkloadVolumetrics.ps1` | `-Include Exchange,OneDrive,SharePoint,Groups`, `-OutputPath` |
+| `Export-M365LicenseInventory.ps1` | `-OutputFolder` |
+| `Export-TeamsVoiceInventory.ps1` | `-Include Teams,Voice`, `-OutputFolder` |
+| `Export-PurviewComplianceInventory.ps1` | `-OutputFolder` |
+| `Invoke-AdDivestitureDiscovery.ps1` | `-Module` (default on-prem AD set), `-IncludeCloud`, `-OutputFolder`, `-Credential` |
+
+### Examples
+
+```powershell
+# On-premises discovery set, consolidated
+./Invoke-AdDivestitureDiscovery.ps1 -OutputFolder ./DiscoveryRun
+
+# Add cloud modules (sessions must already be connected)
+Connect-MgGraph -Scopes Domain.Read.All,Organization.Read.All,User.Read.All
+./Invoke-AdDivestitureDiscovery.ps1 -IncludeCloud -OutputFolder ./DiscoveryRun
+
+# Individual modules
+./Export-AdForestInventory.ps1 -OutputFolder ./Forest
+./Export-EntraAuthenticationModel.ps1 -OutputPath ./AuthModel.csv
+```
+
+### Validation Notes
+
+- The orchestrator records a failing/unreachable module as an `Error` row in `DiscoveryIndex.csv` rather than aborting the run; review that index first.
+- `-Credential` is forwarded only to the on-premises AD-querying modules; `Export-EntraConnectConfiguration.ps1` and `Export-ExchangeOnPremInventory.ps1` run in their host's own context and do not accept it.
+- Volumetrics parse Exchange size strings to exact bytes; cross-check the totals against SharePoint/OneDrive admin-centre reporting for the final sizing figure.
+- These scripts complement, and deliberately do not duplicate, the existing Exchange Online / cross-tenant recipient scripts (`Export-ExchangeObjectData`, `Export-DomainCutoverAssessment`, `Get-CrossTenantUserMapping`, `Get-EntraDirSyncProtectionSettings`, `Export-AdminCaPimPosture`).
+
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
 Finds duplicate mail-related values across on-prem Active Directory objects.

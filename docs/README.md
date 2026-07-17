@@ -33,6 +33,22 @@ This directory contains user-facing documentation for the scripts in this reposi
 | `Export-AdcsHardeningAssessment.ps1` | AD CS hardening assessment including ESC1-ESC8 (Appendix B controls ADCS-001..ADCS-010). |
 | `Export-AdBackupRecoveryAssessment.ps1` | AD backup and forest-recovery assessment (Appendix B controls BR-001..BR-010). |
 | `Export-AdMonitoringAssessment.ps1` | Monitoring and detection assessment (Appendix B controls MON-001..MON-010). |
+| `Invoke-AdDivestitureDiscovery.ps1` | Runs the divestiture discovery modules into one run folder with a consolidated index. |
+| `Export-AdForestInventory.ps1` | Forest/domain topology, functional levels, schema version, DC inventory with FSMO roles. |
+| `Export-AdSiteTopologyInventory.ps1` | AD Sites & Services: sites, subnets, site links, replication connections. |
+| `Export-AdTrustInventory.ps1` | Domain/forest trusts with direction, type, SID filtering, and selective auth. |
+| `Export-AdOuGpoInventory.ps1` | OU tree and GPO inventory with Intune-migration candidate flags. |
+| `Export-AdObjectPopulationInventory.ps1` | User/group/computer volumetrics with server-vs-workstation split. |
+| `Export-AdPrivilegedIdentityInventory.ps1` | Privileged, service, and non-human identity inventory with Kerberos delegation. |
+| `Export-AdSidHistoryInventory.ps1` | Objects carrying SIDHistory and their source domains. |
+| `Export-AdInfraDependencyInventory.ps1` | DNS, DHCP, NTP, RADIUS/NPS, and AD CS dependency inventory. |
+| `Export-ExchangeOnPremInventory.ps1` | On-prem/hybrid Exchange servers, connectors, accepted domains, and SMTP relay. |
+| `Export-EntraConnectConfiguration.ps1` | Entra Connect / Cloud Sync configuration, connectors, and sync rules. |
+| `Export-EntraAuthenticationModel.ps1` | Per-domain Managed vs Federated (ADFS) authentication and PHS/PTA posture. |
+| `Export-M365WorkloadVolumetrics.ps1` | Exchange/OneDrive/SharePoint/Teams sizing for tenant-to-tenant migration. |
+| `Export-M365LicenseInventory.ps1` | Tenant SKUs and per-user license assignments for SKU mapping. |
+| `Export-TeamsVoiceInventory.ps1` | Teams (private/shared channel split) and Teams Voice inventory. |
+| `Export-PurviewComplianceInventory.ps1` | Sensitivity labels, retention, and DLP inventory for re-creation planning. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | On-prem Active Directory duplicate mail/proxy address detection. |
 | `Get-MailDnsRecords.ps1` | Windows PowerShell MX, SPF, DMARC, and DKIM lookup. |
 | `get-mail-dns-records.sh` | macOS/Linux MX, SPF, DMARC, and DKIM lookup using `dig`. |

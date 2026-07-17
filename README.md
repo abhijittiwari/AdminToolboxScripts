@@ -36,6 +36,22 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Export-AdcsHardeningAssessment.ps1` | PowerShell | Assesses AD CS hardening controls ADCS-001..ADCS-010 including the ESC1-ESC8 attack paths, CA audit logging, key protection, and CRL/OCSP management. |
 | `Export-AdBackupRecoveryAssessment.ps1` | PowerShell | Assesses AD backup and forest-recovery controls BR-001..BR-010 (per-DC backup coverage from replication metadata, encryption/residency, immutable copies, runbook, restore testing, retention). |
 | `Export-AdMonitoringAssessment.ps1` | PowerShell | Assesses monitoring and detection controls MON-001..MON-010 (SIEM forwarding, audit policy, privileged-group alerting, suspicious-auth detection, time sync, honeytokens, health monitoring). |
+| `Invoke-AdDivestitureDiscovery.ps1` | PowerShell | Runs the divestiture discovery modules (on-prem AD, hybrid identity, on-prem Exchange, and optionally M365) into one run folder with a consolidated index. |
+| `Export-AdForestInventory.ps1` | PowerShell | Inventories forest/domain topology: functional levels, schema version, UPN suffixes, and the DC inventory with FSMO roles. |
+| `Export-AdSiteTopologyInventory.ps1` | PowerShell | Inventories AD Sites & Services: sites, subnets, site links, and replication connections (subnet-to-site mapping). |
+| `Export-AdTrustInventory.ps1` | PowerShell | Inventories domain/forest trusts with direction, type, and SID-filtering/selective-auth posture for SIDHistory coexistence design. |
+| `Export-AdOuGpoInventory.ps1` | PowerShell | Inventories the OU tree and GPOs (links, filtering, configured settings) and flags Intune-migration candidates. |
+| `Export-AdObjectPopulationInventory.ps1` | PowerShell | Reports user/group/computer volumetrics: active vs disabled, stale, group scope/type, and server-vs-workstation split. |
+| `Export-AdPrivilegedIdentityInventory.ps1` | PowerShell | Inventories privileged group members, adminCount objects, and service/non-human accounts with Kerberos-delegation type. |
+| `Export-AdSidHistoryInventory.ps1` | PowerShell | Lists objects carrying SIDHistory and their source domains for SIDHistory/ACL translation planning. |
+| `Export-AdInfraDependencyInventory.ps1` | PowerShell | Inventories AD-adjacent dependencies: DNS zones, DHCP scopes, NTP sources, NPS/RADIUS clients, and AD CS templates. |
+| `Export-ExchangeOnPremInventory.ps1` | PowerShell | Inventories on-prem/hybrid Exchange: servers, HCW config, connectors, accepted domains, SMTP relay, and public folders. |
+| `Export-EntraConnectConfiguration.ps1` | PowerShell | Inventories Entra Connect / Cloud Sync: staging mode, connectors, sync rules, and the source-anchor posture. |
+| `Export-EntraAuthenticationModel.ps1` | PowerShell | Reports per-domain Managed vs Federated (ADFS) authentication and the tenant's PHS/PTA/Seamless SSO posture. |
+| `Export-M365WorkloadVolumetrics.ps1` | PowerShell | Sizes Exchange (mailbox+archive), OneDrive, SharePoint/Teams, and groups for tenant-to-tenant migration planning. |
+| `Export-M365LicenseInventory.ps1` | PowerShell | Exports tenant SKUs and per-user license assignments (direct vs group-based) for target-tenant SKU mapping. |
+| `Export-TeamsVoiceInventory.ps1` | PowerShell | Inventories Teams (with private/shared channel split) and Teams Voice (numbers, auto attendants, call queues). |
+| `Export-PurviewComplianceInventory.ps1` | PowerShell | Inventories sensitivity labels, label policies, retention, and DLP for label re-creation/rehydration planning. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
@@ -696,6 +712,71 @@ Run a single module on its own:
 - Patch-currency controls (DC-002, DJ-002) report the most recent installed hotfix date; cross-check missing updates against your patch management tooling (e.g. ManageEngine) for a definitive answer.
 - The domain-joined computer module assesses a sample (default 25) — scope it with `-ComputersCsv`, `-SearchBase`, or `-SampleSize` for a full or targeted sweep.
 - A module that throws is recorded as a single `Error` row by the orchestrator, so one failing module never aborts the run.
+
+## Divestiture Discovery & Assessment
+
+Sixteen read-only discovery scripts gather the Discovery & Design evidence a tenant-to-tenant / new-AD-forest divestiture needs (on-premises AD, hybrid identity, Microsoft 365, and on-premises Exchange), plus an orchestrator that runs them and consolidates the outputs. Every script only reads — it collects inventory and volumetrics and never changes anything. Each writes CSV output (single `-OutputPath` or a multi-CSV `-OutputFolder`) and follows the same collector/shaper structure as the hardening suite, so the shaping logic is unit-tested with mock data.
+
+Much of the Exchange Online recipient-level discovery is already covered elsewhere in this repo (`Export-ExchangeObjectData` and its jobs, `Export-ExchangeMigrationReadiness`, `Export-DomainCutoverAssessment`, `Export-TenantDomainDependencyInventory`, `Get-CrossTenantUserMapping`, `Get-EntraDirSyncProtectionSettings`, `Export-AdminCaPimPosture`). These scripts add the on-premises AD forest discovery, hybrid-identity/auth-model discovery, M365 volumetrics/licensing, and the on-prem Exchange inventory that those don't cover.
+
+### Modules
+
+| Script | Group | What it inventories |
+| --- | --- | --- |
+| `Export-AdForestInventory.ps1` | On-prem AD | Forest/domain functional levels, schema version, UPN suffixes, DC inventory with FSMO roles. Output: `Forest.csv`, `Domains.csv`, `DomainControllers.csv`. |
+| `Export-AdSiteTopologyInventory.ps1` | On-prem AD | Sites, subnets, site links, replication connections. Output: `Sites.csv`, `Subnets.csv`, `SiteLinks.csv`, `SiteConnections.csv`. |
+| `Export-AdTrustInventory.ps1` | On-prem AD | Trusts with direction, forest/external type, transitivity, SID filtering, selective auth. |
+| `Export-AdOuGpoInventory.ps1` | On-prem AD | OU tree and GPOs (links, filtering, configured settings) with an Intune-candidate flag. Output: `OrganizationalUnits.csv`, `Gpos.csv`. |
+| `Export-AdObjectPopulationInventory.ps1` | On-prem AD | User/group/computer volumetrics: enabled vs disabled, stale, group scope/type, server vs workstation. |
+| `Export-AdPrivilegedIdentityInventory.ps1` | On-prem AD | Privileged group members, adminCount objects, service/non-human accounts with SPNs and Kerberos-delegation type. |
+| `Export-AdSidHistoryInventory.ps1` | On-prem AD | Objects with SIDHistory and their source domain SIDs. |
+| `Export-AdInfraDependencyInventory.ps1` | On-prem AD | DNS zones, DHCP scopes, NTP sources, NPS/RADIUS clients, AD CS templates. One CSV per dependency. |
+| `Export-EntraConnectConfiguration.ps1` | Hybrid identity | Entra Connect / Cloud Sync: staging mode, connectors, sync rules, source-anchor posture. Runs on the sync server. |
+| `Export-EntraAuthenticationModel.ps1` | Hybrid identity | Per-domain Managed vs Federated (ADFS) and tenant PHS/PTA/Seamless SSO posture (Microsoft Graph). |
+| `Export-ExchangeOnPremInventory.ps1` | On-prem Exchange | Servers, HCW/hybrid config, send/receive connectors, accepted domains, anonymous SMTP relay, public folders, DAGs. |
+| `Export-M365WorkloadVolumetrics.ps1` | M365 | Exchange (mailbox+archive sizes), OneDrive, SharePoint/Teams site sizes, groups, DLs — migration sizing. |
+| `Export-M365LicenseInventory.ps1` | M365 | Tenant SKUs and per-user license assignments (direct vs group-based) with friendly product names. |
+| `Export-TeamsVoiceInventory.ps1` | M365 | Teams (with private/shared channel split) and Voice (numbers by type, auto attendants, call queues). |
+| `Export-PurviewComplianceInventory.ps1` | M365 | Sensitivity labels (with sub-labels), label policies, retention, and DLP for re-creation planning. |
+| `Invoke-AdDivestitureDiscovery.ps1` | Orchestrator | Runs the selected modules into a per-run folder and writes `DiscoveryIndex.csv` summarising each module's status. |
+
+### Requirements
+
+- PowerShell 7+ with RSAT (`ActiveDirectory`, `GroupPolicy`, `DnsServer`, `DhcpServer`) for the on-premises modules; WinRM to the DCs for the NTP collection.
+- `Export-EntraConnectConfiguration.ps1` runs on the Entra Connect sync server (needs the `ADSync` module).
+- Cloud modules require connected sessions: Microsoft Graph (`Connect-MgGraph`), Exchange Online (`Connect-ExchangeOnline`), SharePoint/PnP (`Connect-SPOService`), Teams (`Connect-MicrosoftTeams`), and Security & Compliance (`Connect-IPPSSession`) as applicable.
+- Recommended rights: a read-only/security-reader account on-premises and Global Reader / Security Reader in Entra ID.
+
+### Usage
+
+Run the on-premises discovery set and consolidate the output:
+
+```powershell
+./Invoke-AdDivestitureDiscovery.ps1 -OutputFolder ./DiscoveryRun
+```
+
+Add the cloud modules (each needs its session already connected):
+
+```powershell
+Connect-MgGraph -Scopes Domain.Read.All,Organization.Read.All,User.Read.All
+Connect-ExchangeOnline; Connect-MicrosoftTeams
+./Invoke-AdDivestitureDiscovery.ps1 -IncludeCloud -OutputFolder ./DiscoveryRun
+```
+
+Run individual modules on their own:
+
+```powershell
+./Export-AdForestInventory.ps1 -OutputFolder ./Forest
+./Export-EntraAuthenticationModel.ps1 -OutputPath ./AuthModel.csv
+./Export-M365WorkloadVolumetrics.ps1 -Include Exchange,OneDrive -OutputPath ./Volumetrics.csv
+```
+
+### Notes
+
+- A module that throws is recorded as an `Error` row in `DiscoveryIndex.csv`, so one failing/unreachable module never aborts the orchestrated run.
+- The on-premises modules run wherever RSAT and connectivity exist; `Export-EntraConnectConfiguration.ps1` and `Export-ExchangeOnPremInventory.ps1` must run on (or against) the sync server and an Exchange server respectively, so the orchestrator does not forward `-Credential` to them.
+- `Export-EntraAuthenticationModel.ps1` directly answers the SoW's #1 priority action — confirming whether the current authentication model is federated (ADFS) or managed (PHS/PTA).
+- `Export-M365WorkloadVolumetrics.ps1` parses Exchange size strings to exact bytes so the per-workload totals are precise for bandwidth/effort sizing.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
