@@ -599,6 +599,86 @@ Writes one Excel workbook with three worksheets. `Summary` holds posture metrics
 - Review the `Summary` gap metrics first: admins with no enabled CA policy and admins without MFA-requiring CA are the primary posture findings.
 - If the PIM warning appears, eligible-role mapping is incomplete; re-run with an account that can read role eligibility schedules.
 
+## Appendix B Security Hardening Assessment
+
+Seven read-only assessment scripts implement the Appendix B baseline hardening controls for Domain Controllers, domain-joined computers, Entra ID, DNS, AD CS, backup/recovery, and monitoring, plus an orchestrator that runs them and merges the results. Every module only reads; nothing is changed.
+
+### Common Uses
+
+- Run a full CIS/Microsoft-baseline gap assessment across the on-premises AD estate and the Entra ID tenant.
+- Produce an auditable per-control CSV (`ControlId`, `Control`, `Target`, `Status`, `Evidence`) mapped 1:1 to the Appendix B control IDs.
+- Re-check specific control families (just DNS, just AD CS, just the ESC1-ESC8 certificate paths) on their own.
+- Merge every module's findings into a single `AllControls.csv` with a consolidated status summary.
+
+### Status values
+
+Each control resolves to `Pass`, `Fail`, `Warning`, `Manual`, or `Error`. `Manual` is a first-class result for controls that cannot be proven from configuration alone (SIEM onboarding, restore testing, ACL review); the `Evidence` field states exactly what to confirm. `Error` means the fact could not be collected (host unreachable or insufficient rights).
+
+### Requirements
+
+- PowerShell 7+ with RSAT modules (`ActiveDirectory`, `DnsServer`) on the management host.
+- WinRM to the Domain Controllers and sampled computers for the modules that collect per-host facts (DC, DJ, MON).
+- The Entra ID module needs the Microsoft Graph PowerShell SDK and a signed-in session with `Policy.Read.All`, `Directory.Read.All`, `RoleManagement.Read.Directory`, `AccessReview.Read.All`, `User.Read.All`.
+- Recommended rights: a read-only/security-reader account on-premises and Global Reader or Security Reader in Entra ID.
+
+### Modules
+
+| Script | Controls | Scope |
+| --- | --- | --- |
+| `Export-DcHardeningAssessment.ps1` | DC-001..DC-022 | Domain Controllers (per-DC via WinRM + domain-level AD facts). |
+| `Export-DomainComputerHardeningAssessment.ps1` | DJ-001..DJ-020 | Domain-joined member servers/workstations (sampled) + domain-level LAPS, stale-account, and machine-account-quota facts. |
+| `Export-EntraIdHardeningAssessment.ps1` | AAD-001..AAD-015 | Entra ID tenant via Microsoft Graph. |
+| `Export-DnsHardeningAssessment.ps1` | DNS-001..DNS-010 | Windows DNS servers (defaults to all DCs) via the DnsServer module. |
+| `Export-AdcsHardeningAssessment.ps1` | ADCS-001..ADCS-010 | AD CS templates/CAs from the configuration partition + certutil (ESC1-ESC8 and operational controls). |
+| `Export-AdBackupRecoveryAssessment.ps1` | BR-001..BR-010 | AD backup/forest-recovery (per-DC `dsaSignature` markers + procedural controls). |
+| `Export-AdMonitoringAssessment.ps1` | MON-001..MON-010 | Monitoring/detection (per-DC audit + forwarding facts, honeytoken accounts, detection-content review). |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | orchestrator | Runs selected modules and merges results into `AllControls.csv`. |
+
+### Parameters
+
+| Script | Parameters |
+| --- | --- |
+| `Export-DcHardeningAssessment.ps1` | `-Server <names>` (default all DCs), `-Credential`, `-PatchAgeDays` (30), `-KrbtgtMaxAgeDays` (180), `-BackupMaxAgeDays` (7), `-MaxDomainAdmins` (5), `-OutputPath`. |
+| `Export-DomainComputerHardeningAssessment.ps1` | `-ComputerName <names>` \| `-ComputersCsv <path>` (`ComputerName`/`Name` column) \| AD discovery with `-SearchBase` + `-SampleSize` (25), `-StaleDays` (90), `-PatchAgeDays` (30), `-LapsMinimumCoveragePercent` (95), `-BaselineGpoPattern <regex>`, `-Credential`, `-OutputPath`. |
+| `Export-EntraIdHardeningAssessment.ps1` | `-BreakGlassUpn <upns>`, `-MaxGlobalAdmins` (5), `-OutputPath`. |
+| `Export-DnsHardeningAssessment.ps1` | `-DnsServer <names>` (default all DCs), `-MinimumSocketPoolSize` (2500), `-Credential`, `-OutputPath`. |
+| `Export-AdcsHardeningAssessment.ps1` | `-Server <name>`, `-SkipCaRegistryChecks`, `-OutputPath`. |
+| `Export-AdBackupRecoveryAssessment.ps1` | `-BackupMaxAgeDays` (7), `-RunbookLastUpdated <date>` + `-RunbookMaxAgeDays` (365), `-LastRestoreTest <date>` + `-RestoreTestMaxAgeDays` (365), `-Server`, `-Credential`, `-OutputPath`. |
+| `Export-AdMonitoringAssessment.ps1` | `-Server <names>` (default all DCs), `-HoneytokenNamePattern <wildcard>`, `-Credential`, `-OutputPath`. |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | `-Module DC,DJ,DNS,ADCS,BR,MON` (default; `AAD` optional), `-IncludeEntraId`, `-OutputFolder`, `-Credential`, `-BreakGlassUpn`, `-ComputersCsv`, `-HoneytokenNamePattern`. |
+
+### Examples
+
+```powershell
+# Full on-premises suite, merged report
+./Invoke-AdSecurityHardeningAssessment.ps1 -OutputFolder ./HardeningRun
+```
+
+```powershell
+# Include Entra ID (needs an existing Graph session) and verify break-glass + honeytokens
+Connect-MgGraph -Scopes Policy.Read.All,Directory.Read.All,RoleManagement.Read.Directory,AccessReview.Read.All,User.Read.All
+./Invoke-AdSecurityHardeningAssessment.ps1 -IncludeEntraId -BreakGlassUpn bg1@contoso.com,bg2@contoso.com -HoneytokenNamePattern 'HNY-*'
+```
+
+```powershell
+# Single modules
+./Export-DcHardeningAssessment.ps1 -Server DC01,DC02 -OutputPath ./DcHardening.csv
+./Export-AdcsHardeningAssessment.ps1 -OutputPath ./AdcsHardening.csv
+./Export-AdBackupRecoveryAssessment.ps1 -RunbookLastUpdated 2026-06-15 -LastRestoreTest 2026-05-01 -OutputPath ./BackupRecovery.csv
+```
+
+### Output
+
+Each module writes a CSV with one row per control (per target where relevant): `ControlId`, `Control`, `Target`, `Status`, `Evidence`. The orchestrator writes each module's CSV into the run folder plus a merged `AllControls.csv` that adds a `Module` column, and prints a per-module and overall status count.
+
+### Validation Notes
+
+- Treat `Manual` rows as a worklist, not a pass: the `Evidence` field names the artifact to confirm (SIEM onboarding, restore tests, DACL/ACL review, per-user MFA state).
+- DC-002/DJ-002 report the most recent installed hotfix date only; cross-check missing updates against patch management tooling (e.g. ManageEngine) for a definitive verdict.
+- The domain-joined computer module assesses a sample (default 25); scope it with `-ComputersCsv`, `-SearchBase`, or `-SampleSize` for a full or targeted sweep.
+- AD CS controls apply only where Certificate Services is present; with no CA the module emits a single not-applicable row.
+- Provide `-BaselineGpoPattern` (DJ-015), `-BreakGlassUpn` (AAD-007), `-HoneytokenNamePattern` (MON-007), and the backup runbook/restore-test dates (BR-004/BR-005) to convert those controls from Manual to an evaluated result.
+
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
 Finds duplicate mail-related values across on-prem Active Directory objects.

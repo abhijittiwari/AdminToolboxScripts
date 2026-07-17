@@ -28,6 +28,14 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a source/target admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Get-CrossTenantUserMapping.ps1` | PowerShell | Exports all users from a source tenant, then matches each one to a target tenant account whose synced on-premises `extensionAttribute13` or `extensionAttribute14` contains the source UPN. |
 | `Export-AdminCaPimPosture.ps1` | PowerShell | Maps Conditional Access policy applicability and PIM-eligible directory roles for in-scope admins into a combined Excel workbook with posture metrics. |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | PowerShell | Runs the Appendix B hardening assessment modules and merges their per-control results into one CSV with a consolidated summary. |
+| `Export-DcHardeningAssessment.ps1` | PowerShell | Assesses Domain Controller hardening controls DC-001..DC-022 (supported OS, patching, Secure Boot/BitLocker, LDAP/SMB signing, NTLM, Netlogon, Print Spooler, audit policy, krbtgt age, backups). |
+| `Export-DomainComputerHardeningAssessment.ps1` | PowerShell | Assesses domain-joined computer hardening controls DJ-001..DJ-020 (patching, LAPS, BitLocker, Secure Boot/TPM, Defender/EDR, ASR, legacy protocols, UAC, Credential Guard, stale accounts, machine account quota). |
+| `Export-EntraIdHardeningAssessment.ps1` | PowerShell | Assesses Entra ID hardening controls AAD-001..AAD-015 via Microsoft Graph (MFA, phishing-resistant admin MFA, legacy auth, Conditional Access, PIM, break-glass, guest/consent restrictions, Identity Protection, access reviews). |
+| `Export-DnsHardeningAssessment.ps1` | PowerShell | Assesses Windows DNS Server hardening controls DNS-001..DNS-010 (secure dynamic updates, zone transfers, scavenging, forwarders, recursion, DNSSEC, logging, global query block list, socket pool/cache locking). |
+| `Export-AdcsHardeningAssessment.ps1` | PowerShell | Assesses AD CS hardening controls ADCS-001..ADCS-010 including the ESC1-ESC8 attack paths, CA audit logging, key protection, and CRL/OCSP management. |
+| `Export-AdBackupRecoveryAssessment.ps1` | PowerShell | Assesses AD backup and forest-recovery controls BR-001..BR-010 (per-DC backup coverage from replication metadata, encryption/residency, immutable copies, runbook, restore testing, retention). |
+| `Export-AdMonitoringAssessment.ps1` | PowerShell | Assesses monitoring and detection controls MON-001..MON-010 (SIEM forwarding, audit policy, privileged-group alerting, suspicious-auth detection, time sync, honeytokens, health monitoring). |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
 | `Get-MailDnsRecords.ps1` | PowerShell | Checks MX, SPF, DMARC, and DKIM DNS records on Windows. |
 | `get-mail-dns-records.sh` | Bash | Checks MX, SPF, DMARC, and DKIM DNS records on macOS/Linux using `dig`. |
@@ -53,6 +61,8 @@ Column names each script reads from its input CSV(s). A CSV produced by the refe
 | `Export-DomainCutoverAssessment.ps1` | `-AcceptedDomainsCsv` | `DomainName`, `DomainType`, `Default`, `InitialDomain`, `MatchSubDomains`, `PendingRemoval`, `WhenCreated` |
 | `Get-CrossTenantAdminRoleAssignments.ps1` | `-InputCsv` | `Prefix` plus the two UPN columns named by `-SourceUpnColumn` / `-TargetUpnColumn` (defaults `SourceUPN` / `TargetUPN`). |
 | `Export-AdminCaPimPosture.ps1` | `-InputCsv` | `UserPrincipalName` |
+| `Export-DomainComputerHardeningAssessment.ps1` | `-ComputersCsv` | `ComputerName` (falls back to `Name`); each value is a computer to assess remotely. |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | `-ComputersCsv` | Same as above (passed through to the domain-joined computer module). |
 
 ## Export-ExchangeObjectData.ps1
 
@@ -608,6 +618,84 @@ The output is one Excel workbook with three worksheets:
 - `AppliesOnPimActivation` marks role-scoped policies that only start applying once the admin activates a PIM-eligible role.
 - Policies the admin is explicitly excluded from are listed separately so exclusion gaps are visible.
 - If PIM eligibility cannot be read, active-role mapping still completes and a warning is shown.
+
+## Appendix B Security Hardening Assessment
+
+Seven read-only assessment scripts implement the Appendix B baseline hardening controls, plus an orchestrator that runs them and merges the results. Each script evaluates its controls and emits one row per control (per target where relevant) with a `Status`, `ControlId`, `Control`, `Target`, and `Evidence` column. Nothing is ever changed — every module only reads.
+
+Every control resolves to one of five statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `Pass` | The control is met based on collected evidence. |
+| `Fail` | The control is not met; the evidence explains why. |
+| `Warning` | Partially met, or met via a weaker mechanism (e.g. Security Defaults instead of Conditional Access). |
+| `Manual` | Not fully verifiable programmatically (SIEM onboarding, restore testing, ACL review); the evidence states exactly what to confirm. |
+| `Error` | The fact could not be collected (host unreachable, insufficient rights). |
+
+### Modules and control coverage
+
+| Script | Controls | What it checks |
+| --- | --- | --- |
+| `Export-DcHardeningAssessment.ps1` | DC-001..DC-022 | Per-DC (via WinRM): OS support, patch currency, Secure Boot, BitLocker, firewall, anti-malware/EDR, unnecessary services, PowerShell restrictions, non-AD roles, LDAP signing/channel binding, SMB signing, NTLM/LM, Netlogon secure channel, hardened UNC paths, Print Spooler, audit policy + log collection, user rights. Domain-level: built-in Administrator, privileged group sizes, krbtgt age, per-DC system-state backups. |
+| `Export-DomainComputerHardeningAssessment.ps1` | DJ-001..DJ-020 | Per-computer (sampled via WinRM): OS support/patching, BitLocker, Secure Boot + TPM 2.0, firewall, Defender/EDR, ASR rules, legacy protocols (SMBv1/LLMNR/NBT-NS), NTLM/SMB signing, local admin least privilege, UAC, Credential Guard + LSA protection, PowerShell logging, baseline GPOs, removable media/AutoRun, screen lock/banner, time hierarchy. Domain-level: Windows LAPS coverage, stale computer accounts, `ms-DS-MachineAccountQuota`. |
+| `Export-EntraIdHardeningAssessment.ps1` | AAD-001..AAD-015 | Via Microsoft Graph: MFA for all users, phishing-resistant MFA for admins, legacy auth blocking, Conditional Access vs Security Defaults, per-user MFA retirement, PIM JIT for Global Admins, break-glass accounts + CA exclusions, GA minimization, guest invitation restrictions, user consent restrictions, log retention/SIEM, password protection, compliant-device for admin portals, Identity Protection risk policies, access reviews. |
+| `Export-DnsHardeningAssessment.ps1` | DNS-001..DNS-010 | Per DNS server (via the DnsServer module): AD-integrated zones with secure dynamic updates, zone transfer restrictions, aging/scavenging, forwarders, recursion/root hints, DNSSEC, query/change logging, global query block list (WPAD/ISATAP), socket pool + cache locking, zone/record permissions. |
+| `Export-AdcsHardeningAssessment.ps1` | ADCS-001..ADCS-010 | From the AD configuration partition + certutil: template enrollment least privilege, requester-supplied subject (ESC1), dangerous EKUs (ESC2/ESC3), template/CA ACLs (ESC4/ESC5), `EDITF_ATTRIBUTESUBJECTALTNAME2` (ESC6), CA admin permissions (ESC7), NTLM relay/web enrollment (ESC8), CA audit logging, key protection, CRL/OCSP. Emits a single not-applicable row when no CA is present. |
+| `Export-AdBackupRecoveryAssessment.ps1` | BR-001..BR-010 | Per-DC backup coverage and recency from AD replication metadata (`dsaSignature`), plus procedural controls (encryption/residency, immutable copies, forest-recovery runbook, restore testing, retention, isolated recovery, alerting, access control, restore validation). Runbook and restore-test dates can be supplied to auto-evaluate their currency. |
+| `Export-AdMonitoringAssessment.ps1` | MON-001..MON-010 | Per-DC (via WinRM): SIEM/WEF forwarding, advanced audit policy coverage, privileged-group change auditing, time synchronization, NTLM/legacy auth auditing. Domain-level: honeytoken accounts (by name pattern), and procedural detection-content controls (Kerberoasting/AS-REP/spray detection, retention, health monitoring, use-case review). |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | (orchestrator) | Runs the selected modules, writes each module's CSV into a per-run folder, and merges them into `AllControls.csv` with a `Module` column and a consolidated per-module and overall status summary. |
+
+### Requirements
+
+- PowerShell 7+ on a management host with the RSAT modules installed (`ActiveDirectory`, `DnsServer`).
+- WinRM connectivity to the Domain Controllers / sampled computers for the modules that collect per-host facts (DC, DJ, MON).
+- The Entra ID module requires the Microsoft Graph PowerShell SDK (`Install-Module Microsoft.Graph`) and a signed-in Graph session; it reads with `Policy.Read.All`, `Directory.Read.All`, `RoleManagement.Read.Directory`, `AccessReview.Read.All`, and `User.Read.All`.
+- Recommended rights: a read-only/security-reader account on-premises and Global Reader or Security Reader in Entra ID.
+
+### Key parameters
+
+| Script | Parameter | Description |
+| --- | --- | --- |
+| `Export-DcHardeningAssessment.ps1` | `-Server`, `-KrbtgtMaxAgeDays`, `-BackupMaxAgeDays`, `-PatchAgeDays`, `-MaxDomainAdmins` | Target DCs (defaults to all) and the thresholds for krbtgt age, backup recency, patch age, and Domain Admins count. |
+| `Export-DomainComputerHardeningAssessment.ps1` | `-ComputerName`, `-ComputersCsv`, `-SearchBase`, `-SampleSize`, `-BaselineGpoPattern`, `-LapsMinimumCoveragePercent` | Which computers to sample and how, plus the regex that identifies the security-baseline GPO (DJ-015) and the LAPS coverage threshold (DJ-003). |
+| `Export-EntraIdHardeningAssessment.ps1` | `-BreakGlassUpn`, `-MaxGlobalAdmins` | Break-glass accounts to verify against CA exclusions (AAD-007) and the Global Admin count threshold (AAD-008). |
+| `Export-DnsHardeningAssessment.ps1` | `-DnsServer`, `-MinimumSocketPoolSize` | Target DNS servers (defaults to all DCs) and the socket pool size floor (DNS-009). |
+| `Export-AdcsHardeningAssessment.ps1` | `-Server`, `-SkipCaRegistryChecks` | AD server for directory queries; skip the certutil-based CA registry/web-enrollment probes when the CA hosts are unreachable. |
+| `Export-AdBackupRecoveryAssessment.ps1` | `-BackupMaxAgeDays`, `-RunbookLastUpdated`, `-LastRestoreTest` | Backup recency threshold and optional runbook/restore-test dates that convert BR-004/BR-005 from Manual to an evaluated Pass/Warning. |
+| `Export-AdMonitoringAssessment.ps1` | `-Server`, `-HoneytokenNamePattern` | Target DCs and the sAMAccountName wildcard used to verify honeytoken accounts (MON-007). |
+| `Invoke-AdSecurityHardeningAssessment.ps1` | `-Module`, `-IncludeEntraId`, `-OutputFolder`, `-BreakGlassUpn`, `-ComputersCsv`, `-HoneytokenNamePattern` | Which modules to run (default: DC, DJ, DNS, ADCS, BR, MON), whether to add the Graph-dependent Entra ID module, and the per-module inputs to forward. |
+
+Every module also accepts `-OutputPath` (a CSV) and, where it queries AD or uses remoting, `-Credential`.
+
+### Usage
+
+Run the whole on-premises suite and merge the results:
+
+```powershell
+./Invoke-AdSecurityHardeningAssessment.ps1 -OutputFolder ./HardeningRun
+```
+
+Include the Entra ID module (requires an existing `Connect-MgGraph` session) and verify break-glass accounts:
+
+```powershell
+Connect-MgGraph -Scopes Policy.Read.All,Directory.Read.All,RoleManagement.Read.Directory,AccessReview.Read.All,User.Read.All
+./Invoke-AdSecurityHardeningAssessment.ps1 -IncludeEntraId -BreakGlassUpn bg1@contoso.com,bg2@contoso.com -HoneytokenNamePattern 'HNY-*'
+```
+
+Run a single module on its own:
+
+```powershell
+./Export-DcHardeningAssessment.ps1 -Server DC01,DC02 -OutputPath ./DcHardening.csv
+./Export-EntraIdHardeningAssessment.ps1 -BreakGlassUpn bg1@contoso.com -OutputPath ./EntraHardening.csv
+```
+
+### Notes
+
+- `Manual` is a first-class result, not a failure: the evidence field tells the assessor exactly what to confirm (SIEM onboarding, restore tests, ACL/DACL reviews, per-user MFA state). These controls cannot be proven from configuration alone.
+- Patch-currency controls (DC-002, DJ-002) report the most recent installed hotfix date; cross-check missing updates against your patch management tooling (e.g. ManageEngine) for a definitive answer.
+- The domain-joined computer module assesses a sample (default 25) — scope it with `-ComputersCsv`, `-SearchBase`, or `-SampleSize` for a full or targeted sweep.
+- A module that throws is recorded as a single `Error` row by the orchestrator, so one failing module never aborts the run.
 
 ## Find-ADDuplicateEmailProxyAddresses.ps1
 
