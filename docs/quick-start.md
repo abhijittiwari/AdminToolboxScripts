@@ -16,6 +16,9 @@ cd AdminToolboxScripts
 | Assess migration readiness and identify blocked or risky mail objects | `Export-ExchangeMigrationReadiness.ps1` |
 | Assess an accepted domain before a tenant-to-tenant cutover | `Export-DomainCutoverAssessment.ps1` |
 | Report Entra ID admin users and role assignments | `Get-EntraAdminAccounts.ps1` |
+| Assess AD / Entra ID / DNS / AD CS security hardening (Appendix B controls) | `Invoke-AdSecurityHardeningAssessment.ps1` (or the individual `Export-*HardeningAssessment.ps1` / `Export-*Assessment.ps1` modules) |
+| Gather divestiture discovery evidence (forest, trusts, GPOs, hybrid identity, on-prem Exchange, M365 volumetrics) | `Invoke-AdDivestitureDiscovery.ps1` (or the individual `Export-*Inventory.ps1` modules) |
+| Confirm the tenant's authentication model (Managed vs Federated/ADFS) | `Export-EntraAuthenticationModel.ps1` |
 | Find duplicate AD mail/proxy addresses | `Find-ADDuplicateEmailProxyAddresses.ps1` |
 | Check mail DNS records on Windows | `Get-MailDnsRecords.ps1` |
 | Check mail DNS records on macOS/Linux | `get-mail-dns-records.sh` |
@@ -36,6 +39,8 @@ Install only the modules needed for the script you plan to run.
 | `Export-DomainCutoverAssessment.ps1` | `ExchangeOnlineManagement` unless `-SkipExchange`/`-AcceptedDomainsCsv`; `Resolve-DnsName` or `dig` for DNS. |
 | `Get-EntraAdminAccounts.ps1` | Microsoft Graph modules; `ExchangeOnlineManagement` only when using `-IncludeMailbox`. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | RSAT Active Directory PowerShell module on Windows. |
+| `Invoke-AdSecurityHardeningAssessment.ps1` and the hardening modules | PowerShell 7; RSAT (`ActiveDirectory`, `DnsServer`); WinRM to Domain Controllers and sampled computers; Microsoft Graph SDK for the Entra ID module (`-IncludeEntraId`). |
+| `Invoke-AdDivestitureDiscovery.ps1` and the discovery modules | PowerShell 7; RSAT (`ActiveDirectory`, `GroupPolicy`, `DnsServer`, `DhcpServer`); `ADSync` on the sync server for `Export-EntraConnectConfiguration.ps1`; Exchange Management Shell for `Export-ExchangeOnPremInventory.ps1`; Graph / `ExchangeOnlineManagement` / `MicrosoftTeams` / SPO / Security & Compliance sessions for the cloud modules (`-IncludeCloud`). |
 | `Get-MailDnsRecords.ps1` | Windows `DnsClient` module with `Resolve-DnsName`. |
 
 ```powershell
@@ -79,6 +84,32 @@ On macOS, `dig` is included by default. On many Linux distributions, install the
 
 ```powershell
 ./Get-EntraAdminAccounts.ps1 -IncludeMailbox
+```
+
+### Security Hardening Assessment
+
+```powershell
+# On-premises modules (DC, domain computers, DNS, AD CS, backup, monitoring)
+./Invoke-AdSecurityHardeningAssessment.ps1 -OutputFolder ./HardeningRun
+```
+
+```powershell
+# Include the Entra ID module (requires a connected Graph session)
+Connect-MgGraph -Scopes Policy.Read.All,Directory.Read.All,RoleManagement.Read.Directory,AccessReview.Read.All,User.Read.All
+./Invoke-AdSecurityHardeningAssessment.ps1 -IncludeEntraId -BreakGlassUpn bg1@contoso.com
+```
+
+### Divestiture Discovery
+
+```powershell
+# On-premises discovery set (forest, sites, trusts, OU/GPO, populations, privileged, SIDHistory, dependencies)
+./Invoke-AdDivestitureDiscovery.ps1 -OutputFolder ./DiscoveryRun
+```
+
+```powershell
+# Add cloud modules (auth model, M365 volumetrics, licensing, Teams/Voice, Purview)
+Connect-MgGraph -Scopes Domain.Read.All,Organization.Read.All,User.Read.All
+./Invoke-AdDivestitureDiscovery.ps1 -IncludeCloud -OutputFolder ./DiscoveryRun
 ```
 
 ### AD Duplicate Proxy Check
