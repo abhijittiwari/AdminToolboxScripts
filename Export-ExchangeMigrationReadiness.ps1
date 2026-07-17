@@ -9,6 +9,33 @@
     recipients, recipients from a CSV, or those in an Objects.csv inventory
     from Export-ExchangeObjectInventory.ps1.
 
+.PARAMETER All
+    Assess all Exchange Online recipients.
+
+.PARAMETER InputCsv
+    Path to a CSV listing the recipients to assess. The CSV needs one identity
+    column (named by -IdentityColumn) whose values Exchange can resolve: UPN,
+    primary SMTP address, alias, or GUID. Other columns are ignored.
+
+.PARAMETER IdentityColumn
+    Name of the identity column in -InputCsv. Defaults to Identity.
+
+.PARAMETER Identity
+    A single recipient identity to assess.
+
+.PARAMETER ObjectsCsv
+    Path to the Objects.csv inventory produced by Export-ExchangeObjectInventory.ps1
+    (or Export-ExchangeObjectData.ps1). Required columns: Identity, DisplayName,
+    RecipientType. PrimarySmtpAddress and ExternalDirectoryObjectId are used for
+    mailbox and licensing lookups when present.
+
+.PARAMETER OutputFolder
+    Destination folder for MigrationReadiness.csv and the errors CSV. Defaults to
+    the Objects.csv folder (with -ObjectsCsv) or ./ExchangeMigrationReadiness_<timestamp>.
+
+.PARAMETER IncludeLicensing
+    Also read license assignments via Microsoft Graph and include them in the report.
+
 .NOTES
     Requires: ExchangeOnlineManagement, Microsoft.Graph.Authentication
     This script is read-only. It does not modify Exchange or Entra objects.

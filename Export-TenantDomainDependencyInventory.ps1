@@ -13,7 +13,7 @@
     reconfiguration, owner decisions, exclusions, downstream testing, and comms.
 
 .PARAMETER Domain
-    SMTP domain to inventory. Defaults to wae.com.
+    SMTP domain to inventory. Mandatory.
 
 .PARAMETER OutputFolder
     Destination folder. Defaults to .\TenantDomainDependencyInventory_<timestamp>.
@@ -28,15 +28,16 @@
     Do not attempt Get-AddressRewriteEntry.
 
 .EXAMPLE
-    .\Export-TenantDomainDependencyInventory.ps1
+    .\Export-TenantDomainDependencyInventory.ps1 -Domain contoso.com
 
 .EXAMPLE
-    .\Export-TenantDomainDependencyInventory.ps1 -Domain wae.com -OutputFolder .\WaeDependencyInventory
+    .\Export-TenantDomainDependencyInventory.ps1 -Domain contoso.com -OutputFolder .\ContosoDependencyInventory
 #>
 
 [CmdletBinding()]
 param(
-    [string]$Domain = 'wae.com',
+    [Parameter(Mandatory = $true)]
+    [string]$Domain,
     [string]$OutputFolder = ".\TenantDomainDependencyInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss')",
     [switch]$IncludeAll,
     [switch]$SkipMemberExpansion,

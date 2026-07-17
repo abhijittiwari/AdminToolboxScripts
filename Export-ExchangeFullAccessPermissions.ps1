@@ -10,6 +10,15 @@
     Reuses an existing Exchange Online session when one exists and leaves the session open
     so chained job runs authenticate once.
 
+.PARAMETER ObjectsCsv
+    Path to the Objects.csv inventory produced by Export-ExchangeObjectInventory.ps1
+    (or Export-ExchangeObjectData.ps1). Mandatory. Required columns: Identity,
+    PrimarySmtpAddress, RecipientTypeDetails, RecipientType.
+
+.PARAMETER OutputFolder
+    Destination folder for FullAccess.csv and Errors-FullAccess.csv. Defaults to the
+    folder containing Objects.csv.
+
 .NOTES
     Requires: ExchangeOnlineManagement
     This script is read-only. It does not modify Exchange or Entra objects.

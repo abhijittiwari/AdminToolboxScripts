@@ -13,19 +13,50 @@
     Produces the evidence needed to design a shared mailbox to MailUser
     migration and a later domain move to another tenant.
 
+.PARAMETER Domain
+    The accepted domain to assess. Mandatory.
+
+.PARAMETER ObjectsCsv
+    Objects.csv inventory from Export-ExchangeObjectInventory.ps1 (or
+    Export-ExchangeObjectData.ps1) for the shared mailbox analysis. Required
+    columns: Identity, DisplayName, RecipientTypeDetails, PrimarySmtpAddress.
+
+.PARAMETER ProxyAddressesCsv
+    ProxyAddresses.csv export; auto-discovered next to Objects.csv when omitted.
+    Required columns: Identity, AddressType, ProxyAddress.
+
+.PARAMETER MigrationReadinessCsv
+    MigrationReadiness.csv from Export-ExchangeMigrationReadiness.ps1 for hold
+    joins; auto-discovered next to Objects.csv when omitted. Columns used:
+    Identity, LitigationHold, ComplianceHolds, RetentionPolicy, MigrationStatus,
+    BlockingReasons, and (when present) HasArchive and ArchiveState.
+
+.PARAMETER AcceptedDomainsCsv
+    A previously exported AcceptedDomains.csv (from this script or a
+    Get-AcceptedDomain export), enabling fully offline runs. Columns used:
+    DomainName, DomainType, Default, InitialDomain, MatchSubDomains,
+    PendingRemoval, WhenCreated.
+
+.PARAMETER OutputFolder
+    Destination folder. Defaults to the Objects.csv folder, otherwise a
+    timestamped folder.
+
+.PARAMETER SkipExchange
+    Do not connect to Exchange Online.
+
 .NOTES
     Requires: ExchangeOnlineManagement (unless -SkipExchange or -AcceptedDomainsCsv is used)
     DNS lookups use Resolve-DnsName on Windows or dig on macOS/Linux.
     This script is read-only. It does not modify Exchange, Entra, or DNS.
 
 .EXAMPLE
-    ./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv
+    ./Export-DomainCutoverAssessment.ps1 -Domain contoso.com -ObjectsCsv ./export/Objects.csv
 
 .EXAMPLE
-    ./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv -MigrationReadinessCsv ./export/MigrationReadiness.csv
+    ./Export-DomainCutoverAssessment.ps1 -Domain contoso.com -ObjectsCsv ./export/Objects.csv -MigrationReadinessCsv ./export/MigrationReadiness.csv
 
 .EXAMPLE
-    ./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./WaeDomainExchangeStatus.csv -SkipExchange
+    ./Export-DomainCutoverAssessment.ps1 -Domain contoso.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./AcceptedDomains.csv -SkipExchange
 #>
 
 [CmdletBinding()]

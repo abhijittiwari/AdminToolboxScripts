@@ -7,6 +7,33 @@
     and Entra ID group memberships for Exchange Online recipients. Supports all recipients of a
     selected type, identities from CSV, or a single identity.
 
+.PARAMETER All
+    Export all recipients of the selected -RecipientType.
+
+.PARAMETER InputCsv
+    Path to a CSV listing the recipients to export. The CSV needs one identity
+    column (named by -IdentityColumn) whose values Exchange can resolve: UPN,
+    primary SMTP address, alias, or GUID. Other columns are ignored.
+
+.PARAMETER IdentityColumn
+    Name of the identity column in -InputCsv. Defaults to Identity.
+
+.PARAMETER Identity
+    A single recipient identity to export.
+
+.PARAMETER RecipientType
+    Recipient scope: Mailbox, Group, MailUser, MailContact, or All. Defaults to Mailbox.
+
+.PARAMETER OutputFolder
+    Destination folder for the export CSVs and dashboard. Defaults to
+    ./ExchangeObjectData_<timestamp>.
+
+.PARAMETER SkipGraph
+    Skip Microsoft Graph and the Entra ID group membership collection.
+
+.PARAMETER NoDashboard
+    Do not generate the HTML dashboard.
+
 .NOTES
     Requires: ExchangeOnlineManagement
     Group membership collection requires: Microsoft.Graph.Authentication

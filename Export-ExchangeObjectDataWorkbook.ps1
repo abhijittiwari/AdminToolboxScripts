@@ -13,6 +13,18 @@
 
     Fully offline: needs no Exchange Online or Microsoft Graph connection.
 
+.PARAMETER InputFolder
+    Folder containing the export CSVs. Objects.csv is mandatory; ProxyAddresses.csv,
+    FullAccess.csv, SendAs.csv, ExchangeGroupMemberships.csv, EntraGroupMemberships.csv,
+    and Errors*.csv are included when present. The CSVs are consumed with the column
+    layout the export job scripts write; no extra columns are required.
+
+.PARAMETER OutputPath
+    Path of the .xlsx to write. Defaults to ExchangeObjectData.xlsx inside -InputFolder.
+
+.PARAMETER Force
+    Overwrite an existing workbook at -OutputPath.
+
 .NOTES
     Requires: ImportExcel (Install-Module ImportExcel -Scope CurrentUser). Excel itself is
     not required; the workbook is generated cross-platform.

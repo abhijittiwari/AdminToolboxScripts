@@ -1,32 +1,68 @@
 <#
 .SYNOPSIS
-    Exports WAE and Fortescue admin account Entra ID directory role and license details.
+    Exports admin account Entra ID directory role and license details from two tenants.
 
 .DESCRIPTION
-    Reads a CSV containing WAEUPN, Prefix, and FortescueUPN columns. The script connects
-    to Microsoft Graph for WAE, exports the WAE account details, disconnects, prompts for
-    Fortescue sign-in, exports the Fortescue account details, and writes one combined CSV.
-    If a Fortescue UPN is blank or stale, the script strips (Admin) from the matching WAE
-    display name and tries exact Fortescue displayName lookups for Admin <name> first,
-    then <name>, when a candidate finds exactly one user.
+    Reads a CSV that maps admin accounts across a source and a target tenant. The
+    script connects to Microsoft Graph for the source tenant, exports the source
+    account details, disconnects, prompts for target-tenant sign-in, exports the
+    target account details, and writes one combined CSV.
+    If a target UPN is blank or stale, the script strips (Admin) from the matching
+    source display name and tries exact target displayName lookups for Admin <name>
+    first, then <name>, when a candidate finds exactly one user.
 
     The script is read-only. It reports Entra ID directory roles only, including active
     and PIM-eligible assignments when available.
 
 .PARAMETER InputCsv
-    Path to the admin mapping CSV. Defaults to .\Admin.csv.
+    Path to the admin mapping CSV. Defaults to .\Admin.csv. The CSV must contain a
+    Prefix column plus the two UPN columns named by -SourceUpnColumn and
+    -TargetUpnColumn.
 
 .PARAMETER OutputPath
     Combined CSV output path. Defaults to .\CrossTenantAdminRoles_yyyyMMdd_HHmmss.csv.
 
+.PARAMETER SourceUpnColumn
+    Name of the CSV column holding source-tenant UPNs. Defaults to SourceUPN.
+
+.PARAMETER TargetUpnColumn
+    Name of the CSV column holding target-tenant UPNs. Defaults to TargetUPN.
+
+.PARAMETER SourceLabel
+    Friendly name for the source tenant, used in prompts and the Environment
+    column of the report. Defaults to Source.
+
+.PARAMETER TargetLabel
+    Friendly name for the target tenant. Defaults to Target.
+
+.PARAMETER SourceTenantId
+    Optional tenant ID or default domain for the source tenant. Passed to
+    Connect-MgGraph to force sign-in against the correct tenant.
+
+.PARAMETER TargetTenantId
+    Optional tenant ID or default domain for the target tenant. Passed to
+    Connect-MgGraph to force sign-in against the correct tenant.
+
 .EXAMPLE
     .\Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv .\Admin.csv
+
+.EXAMPLE
+    .\Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv .\Admin.csv `
+        -SourceUpnColumn ContosoUPN -TargetUpnColumn FabrikamUPN `
+        -SourceLabel Contoso -TargetLabel Fabrikam `
+        -SourceTenantId contoso.onmicrosoft.com -TargetTenantId fabrikam.onmicrosoft.com
 #>
 
 [CmdletBinding()]
 param(
     [string]$InputCsv = '.\Admin.csv',
-    [string]$OutputPath = ".\CrossTenantAdminRoles_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+    [string]$OutputPath = ".\CrossTenantAdminRoles_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv",
+    [string]$SourceUpnColumn = 'SourceUPN',
+    [string]$TargetUpnColumn = 'TargetUPN',
+    [string]$SourceLabel = 'Source',
+    [string]$TargetLabel = 'Target',
+    [string]$SourceTenantId,
+    [string]$TargetTenantId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -329,11 +365,19 @@ function Invoke-TenantExport {
         [Parameter(Mandatory = $true)] [string]$Environment,
         [Parameter(Mandatory = $true)] [object[]]$Mappings,
         [Parameter(Mandatory = $true)] [string]$UpnColumn,
-        [hashtable]$DisplayNameHints = @{}
+        [hashtable]$DisplayNameHints = @{},
+        [AllowEmptyString()] [string]$TenantId = ''
     )
 
     Write-Host "Connecting to Microsoft Graph for $Environment..." -ForegroundColor Cyan
-    Connect-MgGraph -Scopes @('Directory.Read.All', 'RoleManagement.Read.Directory') -NoWelcome
+    $connectParams = @{
+        Scopes    = @('Directory.Read.All', 'RoleManagement.Read.Directory')
+        NoWelcome = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TenantId)) {
+        $connectParams['TenantId'] = $TenantId
+    }
+    Connect-MgGraph @connectParams
 
     try {
         $roleIndex = Get-TenantRoleIndex
@@ -367,23 +411,24 @@ if (-not (Test-Path -Path $InputCsv -PathType Leaf)) {
 }
 
 $mappings = @(Import-Csv -Path $InputCsv)
-Test-RequiredCsvColumns -Rows $mappings -RequiredColumns @('WAEUPN', 'Prefix', 'FortescueUPN')
+Test-RequiredCsvColumns -Rows $mappings -RequiredColumns @($SourceUpnColumn, 'Prefix', $TargetUpnColumn)
 
 $reportRows = [System.Collections.Generic.List[object]]::new()
-$waeRows = [object[]](Invoke-TenantExport -Environment 'WAE' -Mappings $mappings -UpnColumn 'WAEUPN')
-$reportRows.AddRange($waeRows)
+Write-Host "Sign in to the $SourceLabel tenant when prompted." -ForegroundColor Yellow
+$sourceRows = [object[]](Invoke-TenantExport -Environment $SourceLabel -Mappings $mappings -UpnColumn $SourceUpnColumn -TenantId $SourceTenantId)
+$reportRows.AddRange($sourceRows)
 
-$fortescueDisplayNameHints = @{}
-foreach ($row in $waeRows) {
+$targetDisplayNameHints = @{}
+foreach ($row in $sourceRows) {
     $displayNameHint = ConvertTo-AdminlessDisplayName -DisplayName $row.DisplayName
     if (-not [string]::IsNullOrWhiteSpace($displayNameHint)) {
-        $fortescueDisplayNameHints[[string]$row.Prefix] = $displayNameHint
+        $targetDisplayNameHints[[string]$row.Prefix] = $displayNameHint
     }
 }
 
 Write-Host ''
-Write-Host 'Sign in to the Fortescue tenant when prompted.' -ForegroundColor Yellow
-$reportRows.AddRange([object[]](Invoke-TenantExport -Environment 'Fortescue' -Mappings $mappings -UpnColumn 'FortescueUPN' -DisplayNameHints $fortescueDisplayNameHints))
+Write-Host "Sign in to the $TargetLabel tenant when prompted." -ForegroundColor Yellow
+$reportRows.AddRange([object[]](Invoke-TenantExport -Environment $TargetLabel -Mappings $mappings -UpnColumn $TargetUpnColumn -DisplayNameHints $targetDisplayNameHints -TenantId $TargetTenantId))
 
 $columns = 'Environment','Prefix','InputUPN','UserPrincipalName','DisplayName','ImmutableId',
            'ActiveDirectoryRoles','PimEligibleDirectoryRoles','AllDirectoryRoles',

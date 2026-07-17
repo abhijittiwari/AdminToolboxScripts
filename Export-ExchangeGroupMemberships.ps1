@@ -9,6 +9,15 @@
     Reuses an existing Microsoft Graph context when one exists and leaves it connected so
     chained job runs authenticate once.
 
+.PARAMETER ObjectsCsv
+    Path to the Objects.csv inventory produced by Export-ExchangeObjectInventory.ps1
+    (or Export-ExchangeObjectData.ps1). Mandatory. Required columns: Identity,
+    PrimarySmtpAddress, ExternalDirectoryObjectId, RecipientTypeDetails, RecipientType.
+
+.PARAMETER OutputFolder
+    Destination folder for ExchangeGroupMemberships.csv, EntraGroupMemberships.csv, and
+    the errors CSV. Defaults to the folder containing Objects.csv.
+
 .NOTES
     Requires: Microsoft.Graph.Authentication
     This script is read-only. It does not modify Exchange or Entra objects.

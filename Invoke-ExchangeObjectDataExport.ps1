@@ -15,6 +15,30 @@
     from whatever CSVs exist, and the script exits with code 1. Sessions opened by the jobs
     stay open, so the whole run authenticates to Exchange Online and Microsoft Graph once.
 
+.PARAMETER All
+    Export all recipients of the selected -RecipientType.
+
+.PARAMETER InputCsv
+    Path to a CSV listing the recipients to export, passed through to the inventory
+    job. The CSV needs one identity column (named by -IdentityColumn) whose values
+    Exchange can resolve: UPN, primary SMTP address, alias, or GUID. Other columns
+    are ignored.
+
+.PARAMETER IdentityColumn
+    Name of the identity column in -InputCsv. Defaults to Identity.
+
+.PARAMETER Identity
+    A single recipient identity to export.
+
+.PARAMETER RecipientType
+    Recipient scope: Mailbox, Group, MailUser, MailContact, or All. Defaults to Mailbox.
+
+.PARAMETER OutputFolder
+    Destination folder shared by all jobs. Defaults to ./ExchangeObjectExport_<timestamp>.
+
+.PARAMETER Force
+    Overwrite an existing workbook when building ExchangeObjectData.xlsx.
+
 .NOTES
     Requires: ExchangeOnlineManagement, Microsoft.Graph.Authentication, ImportExcel
     This script is read-only. It does not modify Exchange or Entra objects.

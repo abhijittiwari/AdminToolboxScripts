@@ -21,11 +21,11 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Invoke-ExchangeObjectDataExport.ps1` | PowerShell | Runs all five modular export jobs in sequence: inventory, memberships, SendAs, FullAccess, workbook. |
 | `Export-ExchangeMigrationReadiness.ps1` | PowerShell | Identifies mail objects blocked, risky, or unsuitable for migration due to holds, retention, licensing, or compliance constraints. |
 | `Export-DomainCutoverAssessment.ps1` | PowerShell | Assesses an accepted domain ahead of a tenant-to-tenant cutover: accepted-domain config, MX/SPF/DKIM DNS, and shared mailbox domain usage with hold status. |
-| `Export-TenantDomainDependencyInventory.ps1` | PowerShell | Inventories groups, shared/resource mailboxes, routing, moderation, permissions, and address rewrite dependencies on a target domain such as `wae.com`. |
+| `Export-TenantDomainDependencyInventory.ps1` | PowerShell | Inventories groups, shared/resource mailboxes, routing, moderation, permissions, and address rewrite dependencies on a target SMTP domain. |
 | `Get-EntraAdminAccounts.ps1` | PowerShell | Exports Entra ID admin users, active and PIM-eligible role assignments, MFA status, licenses, mailbox details, group membership, and sign-in activity. |
 | `Get-EntraAdminMailboxInventory.ps1` | PowerShell | Exports Entra ID admin users, including active and PIM-eligible role assignments, with mailbox presence, Exchange GUID, license SKU names, and mailbox type. |
 | `Get-EntraDirSyncProtectionSettings.ps1` | PowerShell | Checks Microsoft Graph directory synchronization protection flags for hard-match cloud object takeover and soft match. |
-| `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a WAE/Fortescue admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
+| `Get-CrossTenantAdminRoleAssignments.ps1` | PowerShell | Uses a source/target admin mapping CSV to export Entra ID active and PIM-eligible directory roles, immutable IDs, UPNs, display names, and licenses from both tenants. |
 | `Get-CrossTenantUserMapping.ps1` | PowerShell | Exports all users from a source tenant, then matches each one to a target tenant account whose synced on-premises `extensionAttribute13` or `extensionAttribute14` contains the source UPN. |
 | `Export-AdminCaPimPosture.ps1` | PowerShell | Maps Conditional Access policy applicability and PIM-eligible directory roles for in-scope admins into a combined Excel workbook with posture metrics. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | PowerShell | Finds duplicate mail-related values across on-prem Active Directory objects. |
@@ -58,9 +58,9 @@ The script connects to Exchange Online on every run. Unless `-SkipGraph` is used
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `-All` | Switch | Off | Exports all recipients matching `-RecipientType`. |
-| `-InputCsv` | String | None | CSV file containing object identities to export. |
+| `-InputCsv` | String | None | CSV file containing object identities to export. Needs one identity column (named by `-IdentityColumn`) with Exchange-resolvable values (UPN, primary SMTP, alias, or GUID); other columns are ignored. |
 | `-Identity` | String | None | Single Exchange-resolvable identity to export. |
-| `-IdentityColumn` | String | `Identity` | CSV column containing identities. |
+| `-IdentityColumn` | String | `Identity` | Name of the identity column in `-InputCsv`. |
 | `-RecipientType` | String | `Mailbox` | Object type filter: `Mailbox`, `Group`, `MailUser`, `MailContact`, or `All`. |
 | `-OutputFolder` | String | Timestamped folder | Folder where CSVs and dashboard are written. |
 | `-SkipGraph` | Switch | Off | Skips Microsoft Graph connection; `ExchangeGroupMemberships.csv` and `EntraGroupMemberships.csv` are written headers-only. |
@@ -152,9 +152,10 @@ Or run the jobs individually:
 
 ### Parameters
 
-- `Export-ExchangeObjectInventory.ps1` takes the same selection parameters as the monolith: `-All`, `-InputCsv` + `-IdentityColumn`, or `-Identity`, plus `-RecipientType` and `-OutputFolder`.
-- The membership/permission jobs take `-ObjectsCsv` (path to `Objects.csv`) and optional `-OutputFolder` (defaults to the folder containing the objects CSV).
-- `Export-ExchangeObjectDataWorkbook.ps1` takes `-InputFolder`, optional `-OutputPath` (default `<InputFolder>/ExchangeObjectData.xlsx`), and `-Force` to overwrite an existing workbook.
+- `Export-ExchangeObjectInventory.ps1` takes the same selection parameters as the monolith: `-All`, `-InputCsv` + `-IdentityColumn`, or `-Identity`, plus `-RecipientType` and `-OutputFolder`. The input CSV needs one identity column (named by `-IdentityColumn`, default `Identity`) with Exchange-resolvable values (UPN, primary SMTP, alias, or GUID); other columns are ignored.
+- The membership/permission jobs take `-ObjectsCsv` (path to `Objects.csv`) and optional `-OutputFolder` (defaults to the folder containing the objects CSV). Required `Objects.csv` columns: `Identity`, `PrimarySmtpAddress`, `RecipientTypeDetails`, `RecipientType` — plus `ExternalDirectoryObjectId` for `Export-ExchangeGroupMemberships.ps1`. An `Objects.csv` produced by the inventory script or the monolith always qualifies.
+- `Export-ExchangeObjectDataWorkbook.ps1` takes `-InputFolder`, optional `-OutputPath` (default `<InputFolder>/ExchangeObjectData.xlsx`), and `-Force` to overwrite an existing workbook. `Objects.csv` must exist in the folder; `ProxyAddresses.csv`, `FullAccess.csv`, `SendAs.csv`, `ExchangeGroupMemberships.csv`, `EntraGroupMemberships.csv`, and `Errors*.csv` are included when present.
+- `Invoke-ExchangeObjectDataExport.ps1` takes the inventory selection parameters plus `-Force`; `-InputCsv` and `-IdentityColumn` are passed through to the inventory job unchanged.
 
 ### Connection Behavior
 
@@ -193,6 +194,8 @@ Assesses mailboxes for migration readiness and flags objects that are blocked, r
 ### Parameters
 
 - Selection (pick one): `-All`, `-InputCsv` + `-IdentityColumn`, `-Identity`, or `-ObjectsCsv` (an `Objects.csv` inventory from `Export-ExchangeObjectInventory.ps1` or the monolith).
+- `-InputCsv` needs one identity column (named by `-IdentityColumn`, default `Identity`) with Exchange-resolvable values (UPN, primary SMTP, alias, or GUID); other columns are ignored.
+- `-ObjectsCsv` requires columns `Identity`, `DisplayName`, and `RecipientType`; `PrimarySmtpAddress` and `ExternalDirectoryObjectId` are used for mailbox and licensing lookups when present.
 - `-OutputFolder` (optional): defaults to the `Objects.csv` folder when `-ObjectsCsv` is used, otherwise a timestamped `ExchangeMigrationReadiness_<timestamp>` folder.
 - `-IncludeLicensing` (optional): checks license assignment via Microsoft Graph; unlicensed users are marked `Blocked` and assigned license SKU names (for example `SPE_E5`, `EXCHANGESTANDARD`) are written to the `Licenses` column.
 
@@ -230,8 +233,10 @@ Assesses an accepted domain ahead of a tenant-to-tenant domain cutover. Confirms
 ### Parameters
 
 - `-Domain` (mandatory): the accepted domain to assess.
-- `-ObjectsCsv` (optional): inventory from `Export-ExchangeObjectInventory.ps1`; `ProxyAddresses.csv` and `MigrationReadiness.csv` are auto-discovered from the same folder (or passed explicitly with `-ProxyAddressesCsv` / `-MigrationReadinessCsv`).
-- `-AcceptedDomainsCsv` (optional): a previous `Get-AcceptedDomain` export, enabling fully offline runs.
+- `-ObjectsCsv` (optional): inventory from `Export-ExchangeObjectInventory.ps1`; `ProxyAddresses.csv` and `MigrationReadiness.csv` are auto-discovered from the same folder (or passed explicitly with `-ProxyAddressesCsv` / `-MigrationReadinessCsv`). Required columns: `Identity`, `DisplayName`, `RecipientTypeDetails`, `PrimarySmtpAddress`.
+- `-ProxyAddressesCsv` (optional): required columns `Identity`, `AddressType`, `ProxyAddress`.
+- `-MigrationReadinessCsv` (optional): columns used are `Identity`, `LitigationHold`, `ComplianceHolds`, `RetentionPolicy`, `MigrationStatus`, `BlockingReasons`, plus `HasArchive` and `ArchiveState` when present.
+- `-AcceptedDomainsCsv` (optional): a previously exported `AcceptedDomains.csv` (from this script or a `Get-AcceptedDomain` export), enabling fully offline runs. Columns used: `DomainName`, `DomainType`, `Default`, `InitialDomain`, `MatchSubDomains`, `PendingRemoval`, `WhenCreated`.
 - `-SkipExchange` (optional): skip the Exchange Online connection.
 - `-OutputFolder` (optional): defaults to the `Objects.csv` folder or a timestamped folder.
 
@@ -239,10 +244,10 @@ Assesses an accepted domain ahead of a tenant-to-tenant domain cutover. Confirms
 
 ```powershell
 # Live tenant assessment
-./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv
+./Export-DomainCutoverAssessment.ps1 -Domain contoso.com -ObjectsCsv ./export/Objects.csv
 
 # Fully offline from previous exports
-./Export-DomainCutoverAssessment.ps1 -Domain wae.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./AcceptedDomains.csv -SkipExchange
+./Export-DomainCutoverAssessment.ps1 -Domain contoso.com -ObjectsCsv ./export/Objects.csv -AcceptedDomainsCsv ./AcceptedDomains.csv -SkipExchange
 ```
 
 ### Output Files
@@ -257,7 +262,7 @@ Assesses an accepted domain ahead of a tenant-to-tenant domain cutover. Confirms
 
 ## Export-TenantDomainDependencyInventory.ps1
 
-Inventories tenant resources that depend on a target SMTP domain such as `wae.com`. It scans distribution lists, mail-enabled security groups, dynamic distribution groups, Microsoft 365 groups, shared mailboxes, room/equipment mailboxes, mailbox permissions, moderation and sender restrictions, forwarding/routing properties, resource delegates, and address rewrite entries.
+Inventories tenant resources that depend on a target SMTP domain. It scans distribution lists, mail-enabled security groups, dynamic distribution groups, Microsoft 365 groups, shared mailboxes, room/equipment mailboxes, mailbox permissions, moderation and sender restrictions, forwarding/routing properties, resource delegates, and address rewrite entries.
 
 ### Requirements
 
@@ -271,7 +276,7 @@ Inventories tenant resources that depend on a target SMTP domain such as `wae.co
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `-Domain` | String | Domain to inventory. Defaults to `wae.com`. |
+| `-Domain` | String | Domain to inventory. Mandatory. |
 | `-OutputFolder` | String | Destination folder. Defaults to `./TenantDomainDependencyInventory_<timestamp>`. |
 | `-IncludeAll` | Switch | Include all scoped objects, not just objects with target-domain dependencies. |
 | `-SkipMemberExpansion` | Switch | Skip group member expansion for very large tenants. |
@@ -280,11 +285,11 @@ Inventories tenant resources that depend on a target SMTP domain such as `wae.co
 ### Usage
 
 ```powershell
-./Export-TenantDomainDependencyInventory.ps1 -Domain wae.com
+./Export-TenantDomainDependencyInventory.ps1 -Domain contoso.com
 ```
 
 ```powershell
-./Export-TenantDomainDependencyInventory.ps1 -Domain wae.com -OutputFolder ./WaeDependencyInventory -SkipMemberExpansion
+./Export-TenantDomainDependencyInventory.ps1 -Domain contoso.com -OutputFolder ./ContosoDependencyInventory -SkipMemberExpansion
 ```
 
 ### Output Files
@@ -453,7 +458,7 @@ Checks the tenant-level Entra ID directory synchronization protection flags expo
 
 ## Get-CrossTenantAdminRoleAssignments.ps1
 
-Exports WAE and Fortescue admin account details from Microsoft Graph using a mapping CSV with `WAEUPN`, `Prefix`, and `FortescueUPN` columns. The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors. If a Fortescue UPN is missing or cannot be found, the script strips `(Admin)` from the matching WAE display name and tries exact Fortescue `displayName` lookups for `Admin <name>` first, then `<name>`.
+Exports admin account details from two tenants (source and target) using a mapping CSV with `Prefix` plus a UPN column per tenant (`SourceUPN` and `TargetUPN` by default; override with `-SourceUpnColumn` / `-TargetUpnColumn`). The report includes Entra ID active directory roles, PIM-eligible directory roles when readable, immutable ID, actual user principal name, display name, assigned license SKU part numbers, lookup status, and errors. If a target UPN is missing or cannot be found, the script strips `(Admin)` from the matching source display name and tries exact target `displayName` lookups for `Admin <name>` first, then `<name>`.
 
 ### Requirements
 
@@ -468,8 +473,14 @@ Exports WAE and Fortescue admin account details from Microsoft Graph using a map
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `-InputCsv` | String | Admin mapping CSV path. Defaults to `./Admin.csv`. |
+| `-InputCsv` | String | Admin mapping CSV path. Defaults to `./Admin.csv`. Required columns: `Prefix` plus the two UPN columns named by `-SourceUpnColumn` / `-TargetUpnColumn`. |
 | `-OutputPath` | String | Combined CSV output path. Defaults to `./CrossTenantAdminRoles_yyyyMMdd_HHmmss.csv`. |
+| `-SourceUpnColumn` | String | CSV column holding source-tenant UPNs. Defaults to `SourceUPN`. |
+| `-TargetUpnColumn` | String | CSV column holding target-tenant UPNs. Defaults to `TargetUPN`. |
+| `-SourceLabel` | String | Friendly source-tenant name used in prompts and the `Environment` column. Defaults to `Source`. |
+| `-TargetLabel` | String | Friendly target-tenant name. Defaults to `Target`. |
+| `-SourceTenantId` | String | Optional tenant ID/domain passed to `Connect-MgGraph` for the source sign-in. |
+| `-TargetTenantId` | String | Optional tenant ID/domain passed to `Connect-MgGraph` for the target sign-in. |
 
 ### Usage
 
@@ -478,15 +489,19 @@ Exports WAE and Fortescue admin account details from Microsoft Graph using a map
 ```
 
 ```powershell
-./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv -OutputPath ./WAE-Fortescue-AdminRoles.csv
+./Get-CrossTenantAdminRoleAssignments.ps1 -InputCsv ./Admin.csv `
+    -SourceUpnColumn ContosoUPN -TargetUpnColumn FabrikamUPN `
+    -SourceLabel Contoso -TargetLabel Fabrikam `
+    -SourceTenantId contoso.onmicrosoft.com -TargetTenantId fabrikam.onmicrosoft.com `
+    -OutputPath ./Contoso-Fabrikam-AdminRoles.csv
 ```
 
 ### Notes
 
-- The script connects to Microsoft Graph once for WAE and once for Fortescue; sign into the requested tenant at each prompt.
+- The script connects to Microsoft Graph once for the source tenant and once for the target tenant; sign into the requested tenant at each prompt (or pass `-SourceTenantId` / `-TargetTenantId` to force the right tenant).
 - Exchange Online RBAC roles are not included.
 - If PIM eligibility cannot be read, active roles are still exported and the PIM warning is included in the `Error` column.
-- Fortescue rows resolved by display-name fallback use `LookupStatus=FoundByDisplayName`; ambiguous display-name matches are not guessed.
+- Target rows resolved by display-name fallback use `LookupStatus=FoundByDisplayName`; ambiguous display-name matches are not guessed.
 - Missing users are exported with `LookupStatus=NotFound`.
 
 ## Get-CrossTenantUserMapping.ps1
