@@ -40,6 +40,9 @@ ActiveDirectory PowerShell module on the source host. IncludeInherited adds
 applicable parent OU and domain links for each selected OU.
 Link metadata is recorded for review. It is never replayed on the destination.
 Use TargetNamePrefix to give the imported GPOs a consistent staging prefix.
+For OU exports, SkipMissingGpoAttributes allows a partial export when Get-GPO
+returns 0x8007200A. Skipped links are identified in SourceLinks.csv and
+SkippedGpoLookups.csv. The default is to stop before writing a partial package.
 
 .EXAMPLE
 .\Move-GpoAcrossDomains.ps1 -Mode Export -Domain old.example.com -Server dc01.old.example.com -SourceOU 'OU=HQ,DC=old,DC=example,DC=com' -IncludeChildOUs -Path C:\GPOTransfer\HQExport -PackagePath C:\GPOTransfer\HQ.zip -WhatIf
@@ -76,7 +79,8 @@ param(
     [string]$SourceOU,
     [switch]$IncludeInherited,
     [string]$TargetNamePrefix,
-    [switch]$IncludeChildOUs
+    [switch]$IncludeChildOUs,
+    [switch]$SkipMissingGpoAttributes
 )
 
 Set-StrictMode -Version Latest
@@ -100,6 +104,9 @@ if ($Mode -eq 'Export') {
     }
     if (($IncludeInherited -or $IncludeChildOUs) -and -not $SourceOU) {
         throw '-IncludeInherited and -IncludeChildOUs require -SourceOU.'
+    }
+    if ($SkipMissingGpoAttributes -and -not $SourceOU) {
+        throw '-SkipMissingGpoAttributes requires -SourceOU.'
     }
     if ($TargetName -or $TargetNamePrefix -or $MigrationTable -or $AllowOverwrite) {
         throw 'TargetName, TargetNamePrefix, MigrationTable and AllowOverwrite are Import-only parameters.'
@@ -135,6 +142,7 @@ if ($Mode -eq 'Export') {
             }
         )
         $seenGpos = @{}
+        $lookupFailures = @{}
         $gpos = @(foreach ($scope in $scopes) {
             $links = @($scope.GpoLinks | Where-Object { $null -ne $_ })
             $directCount = $links.Count
@@ -153,26 +161,58 @@ if ($Mode -eq 'Export') {
                 $linkKey = "$linkId|$($link.Target)"
                 if ($seenLinks.ContainsKey($linkKey)) { continue }
                 $seenLinks[$linkKey] = $true
+                $displayName = $link.DisplayName
+                if (-not $seenGpos.ContainsKey($linkId)) {
+                    $seenGpos[$linkId] = $true
+                    try {
+                        Get-GPO -Guid $linkId @context
+                    } catch {
+                        $lookupException = $_.Exception
+                        $diagnostic = "Get-GPO failed for '$displayName' (GUID $linkId), linked at '$($link.Target)', evaluated for OU '$($scope.Path)' on '$Server' in '$Domain'."
+                        $cause = $lookupException
+                        while ($cause -and ('{0:X8}' -f $cause.HResult) -ne '8007200A') {
+                            $cause = $cause.InnerException
+                        }
+                        if (-not $cause) {
+                            throw [System.InvalidOperationException]::new("$diagnostic $($lookupException.Message)", $lookupException)
+                        }
+                        $lookupFailures[$linkId] = $cause.Message
+                        Write-Warning "$diagnostic HRESULT 0x8007200A. $($cause.Message)"
+                    }
+                }
+                $lookupStatus = 'Resolved'
+                $lookupError = $null
+                if ($lookupFailures.ContainsKey($linkId)) {
+                    $lookupStatus = 'Skipped'
+                    $lookupError = $lookupFailures[$linkId]
+                }
                 $linkRows.Add([pscustomobject]@{
                     SourceGpoId = $linkId.ToString()
-                    DisplayName = $link.DisplayName
+                    DisplayName = $displayName
                     LinkedAt = $link.Target
                     Inherited = $i -ge $directCount
                     Order = $link.Order
                     Enabled = $link.Enabled
                     Enforced = $link.Enforced
                     ScopeOU = $scope.Path
+                    LookupStatus = $lookupStatus
+                    LookupError = $lookupError
                 })
-                if (-not $seenGpos.ContainsKey($linkId)) {
-                    $seenGpos[$linkId] = $true
-                    Get-GPO -Guid $linkId @context
-                }
             }
         })
+        if ($lookupFailures.Count -gt 0) {
+            if (-not $SkipMissingGpoAttributes) {
+                throw "OU export stopped before creating a package. $($lookupFailures.Count) GPO lookup(s) returned 0x8007200A. Review the GUIDs and link locations above, or opt in to a partial export with -SkipMissingGpoAttributes."
+            }
+            if ($gpos.Count -eq 0) {
+                throw "No GPOs could be exported from '$SourceOU'. All $($lookupFailures.Count) GPO lookup(s) returned 0x8007200A."
+            }
+            Write-Warning "Partial export requested. $($lookupFailures.Count) GPO(s) will be skipped."
+        }
         if ($gpos.Count -eq 0) { throw "No GPO links matched the requested scope: $SourceOU" }
         foreach ($linkRow in $linkRows) {
-            Write-Host ("{0} | OU {1} | Linked at {2} | Order {3} | Enabled {4} | Enforced {5}" -f
-                $linkRow.DisplayName, $linkRow.ScopeOU, $linkRow.LinkedAt, $linkRow.Order, $linkRow.Enabled, $linkRow.Enforced)
+            Write-Host ("{0} | OU {1} | Linked at {2} | Order {3} | Enabled {4} | Enforced {5} | {6}" -f
+                $linkRow.DisplayName, $linkRow.ScopeOU, $linkRow.LinkedAt, $linkRow.Order, $linkRow.Enabled, $linkRow.Enforced, $linkRow.LookupStatus)
         }
         $exportTarget = "$Domain / $SourceOU ($($gpos.Count) GPOs across $($scopes.Count) OU(s))"
     } else {
@@ -222,6 +262,11 @@ if ($Mode -eq 'Export') {
         }
         $manifestData['Gpos'] = $exported
         $linkRows | Export-Csv -LiteralPath (Join-Path $Path 'SourceLinks.csv') -NoTypeInformation -Encoding UTF8
+        if ($lookupFailures.Count -gt 0) {
+            $manifestData['SkippedGpoLookupCount'] = $lookupFailures.Count
+            $linkRows | Where-Object { $_.LookupStatus -eq 'Skipped' } |
+                Export-Csv -LiteralPath (Join-Path $Path 'SkippedGpoLookups.csv') -NoTypeInformation -Encoding UTF8
+        }
     } else {
         $manifestData['SourceName'] = $exported[0].SourceName
         $manifestData['SourceGpoId'] = $exported[0].SourceGpoId
@@ -246,8 +291,8 @@ if ($Mode -eq 'Export') {
     return
 }
 
-if ($GpoName -or $GpoId -ne [guid]::Empty -or $SourceOU -or $IncludeInherited -or $IncludeChildOUs) {
-    throw 'GpoName, GpoId, SourceOU, IncludeInherited and IncludeChildOUs are Export-only parameters.'
+if ($GpoName -or $GpoId -ne [guid]::Empty -or $SourceOU -or $IncludeInherited -or $IncludeChildOUs -or $SkipMissingGpoAttributes) {
+    throw 'GpoName, GpoId, SourceOU, IncludeInherited, IncludeChildOUs and SkipMissingGpoAttributes are Export-only parameters.'
 }
 if ($TargetName -and $TargetNamePrefix) {
     throw 'Specify either -TargetName or -TargetNamePrefix.'
@@ -286,6 +331,9 @@ switch ($manifest.SchemaVersion) {
     default { throw 'Unsupported export manifest version.' }
 }
 if ($exported.Count -eq 0) { throw 'The manifest does not contain any GPOs.' }
+if ($manifest.PSObject.Properties['SkippedGpoLookupCount'] -and $manifest.SkippedGpoLookupCount -gt 0) {
+    Write-Warning "This is a partial export. The source skipped $($manifest.SkippedGpoLookupCount) GPO lookup(s). Review SkippedGpoLookups.csv in the export folder or ZIP."
+}
 if ($TargetName -and $exported.Count -gt 1) { throw '-TargetName applies to one GPO. Use -TargetNamePrefix for a batch.' }
 
 $backupPath = Join-Path $Path 'Backup'

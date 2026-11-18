@@ -156,6 +156,7 @@ With no `-PackagePath`, import expects an existing folder containing Manifest.js
 | `-SourceOU` | Export | OU distinguished name. Use instead of GpoName or GpoId. |
 | `-IncludeInherited` | OU export | Adds parent OU and domain links applicable by inheritance for each scanned OU. |
 | `-IncludeChildOUs` | OU export | Scans the selected OU and every descendant OU. Requires the source host's ActiveDirectory module. |
+| `-SkipMissingGpoAttributes` | OU export | Allows a partial export when Get-GPO returns 0x8007200A. Other lookup errors still stop the export. |
 | `-TargetName` | Import | Overrides the destination name for a single GPO. |
 | `-TargetNamePrefix` | Import | Prepends a string to each source display name. Omit both naming options to keep source names. |
 | `-MigrationTable` | Import | Local path to a reviewed .migtable file. |
@@ -206,6 +207,7 @@ This is recovery of the destination GPO backed up before overwrite, not a cross-
 | Export folder / ZIP: Backup | Native GPO backup used for import. |
 | Export folder / ZIP: Source.html, Source.xml | Source policy reports for review. |
 | OU export folder / ZIP: SourceLinks.csv | Direct and selected inherited links, with separate columns for the evaluated OU and the link location. |
+| Partial export folder / ZIP: SkippedGpoLookups.csv | Skipped GPO GUIDs, link locations, evaluated OUs, and lookup error messages. |
 | OU export folder / ZIP: SourceReports/&lt;source GPO GUID&gt; | Per-GPO HTML and XML reports. |
 | Import folder: Import-&lt;timestamp&gt;-&lt;unique-id&gt; | Destination run folder. |
 | Run folder: Destination.html, Destination.xml | Imported policy reports. OU imports place these in per-GPO GUID subfolders. |
@@ -214,6 +216,29 @@ This is recovery of the destination GPO backed up before overwrite, not a cross-
 An import can succeed even if report generation fails; check warnings. Compare source and destination reports in light of intended mappings. Reports alone do not establish settings equivalence or successful client application.
 
 ## Troubleshooting
+
+### Get-GPO returns 0x8007200A during OU export
+
+This code means a requested directory attribute or value was unavailable to the lookup. The script prints the affected GPO GUID, link location, evaluated OU and source DC. The code alone cannot tell you whether the link is stale or the GPO metadata differs across DCs. [Microsoft error codes](https://learn.microsoft.com/en-us/windows/win32/adsi/win32-error-codes)
+
+Retry the GUID against the same DC and inspect its Group Policy container by distinguished name. These checks read AD.
+
+~~~powershell
+$dc = 'dc01.old.example.com'
+$domain = 'old.example.com'
+$id = [guid]'00000000-0000-0000-0000-000000000001' # Replace with the reported GUID
+Get-GPO -Guid $id -Domain $domain -Server $dc
+
+$domainDn = (Get-ADRootDSE -Server $dc).defaultNamingContext
+$gpoDn = "CN=$($id.ToString('B')),CN=Policies,CN=System,$domainDn"
+Get-ADObject -Identity $gpoDn -Server $dc -Properties displayName,gPCFileSysPath,gPCFunctionalityVersion,versionNumber,flags
+~~~
+
+If the lookup succeeds against a different source DC, compare the GPO object and replication state on both DCs before choosing which to use. Check the link and GPO in GPMC before changing either.
+
+The default stops before creating a package if any selected linked GPO has this lookup error. If you can migrate the remaining policies separately, add `-SkipMissingGpoAttributes -WhatIf` to preview the partial export. Remove `-WhatIf` to write it. Skipped GPOs have no backup in the package. Keep `SkippedGpoLookups.csv` as the follow-up list. If every lookup fails, no package is created.
+
+### Other export and import errors
 
 | Symptom | Action |
 | --- | --- |
