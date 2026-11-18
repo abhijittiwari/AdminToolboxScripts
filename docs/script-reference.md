@@ -893,7 +893,7 @@ Backs up one GPO or the GPOs linked to an OU and imports their settings into a d
 
 - Runtime: Windows PowerShell 5.1 and the GroupPolicy module on each host.
 - Required in both modes: `-Mode Export|Import`, `-Domain`, `-Server`, `-Path`.
-- Export selection uses exactly one of `-GpoName`, `-GpoId` or `-SourceOU`. Add `-IncludeInherited` to OU exports to include applicable parent OU and domain links.
+- Export selection uses exactly one of `-GpoName`, `-GpoId` or `-SourceOU`. Add `-IncludeChildOUs` to scan every descendant (ActiveDirectory module required on the source host). Add `-IncludeInherited` for applicable parent OU and domain links in each scanned OU.
 - Optional ZIP: `-PackagePath` creates a new archive on export or reads an existing copied archive on import.
 - Import options include `-TargetName` for one GPO, `-TargetNamePrefix` to prefix every imported name, `-MigrationTable` and `-AllowOverwrite`.
 - Common options: `-WhatIf`, `-Confirm`.

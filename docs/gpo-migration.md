@@ -91,7 +91,7 @@ $source = @{
 
 By default, export selects every direct link on the chosen OU, including disabled links. Add `-IncludeInherited` to include links from parent OUs and the source domain that survive inheritance rules. Review the preview for domain-wide policies such as Default Domain Policy. Each GPO is backed up once by GUID, even if several selected links reference it. If a link references a GPO stored in a different domain, export that GPO separately from its owning domain.
 
-Child OU links and site-linked policies are outside the selection. Link inventory is independent of security filtering, WMI filtering and the resultant policy a particular user or computer receives. See [Get-GPInheritance](https://learn.microsoft.com/en-us/powershell/module/grouppolicy/get-gpinheritance) and [Group Policy processing](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/group-policy/group-policy-processing).
+Use `-IncludeChildOUs` to [scan the entire subtree](#include-child-ous). Site-linked policies are outside the selection. Link inventory is independent of security filtering, WMI filtering and the resultant policy a particular user or computer receives. See [Get-GPInheritance](https://learn.microsoft.com/en-us/powershell/module/grouppolicy/get-gpinheritance) and [Group Policy processing](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/group-policy/group-policy-processing).
 
 Copy the ZIP and updated script to the destination host. Preview the import under your destination account.
 
@@ -110,6 +110,27 @@ $destination = @{
 After reviewing the GPO names and planned operations, rerun without `-WhatIf`. The prefix is optional and helps stage the entire batch under new names. The script checks the whole batch for missing backup entries and destination name conflicts before writing to the domain. Existing targets require `-AllowOverwrite`. When supplied, the script backs up all overwrite targets before the first import.
 
 New GPOs are unlinked. Use `SourceLinks.csv` to review the source location, link order, enabled state, and enforcement for each link. Recreate the desired links and filtering in GPMC after validating the settings. Preserve the destination OU hierarchy when mapping inherited policies, since linking every imported GPO to one OU can change precedence. The OU package requires this version of the script. Previous single-GPO packages remain supported.
+
+## Include child OUs
+
+Set `-SourceOU` to the top OU of the subtree and add `-IncludeChildOUs`. The source host needs the RSAT Active Directory PowerShell module and read access to the subtree. Run the export with `-WhatIf` to preview the selected links.
+
+~~~powershell
+$source = @{
+    Mode            = 'Export'
+    Domain          = 'old.example.com'
+    Server          = 'dc01.old.example.com'
+    SourceOU        = 'OU=HQ,DC=old,DC=example,DC=com'
+    IncludeChildOUs = $true
+    Path            = 'C:\GPOTransfer\HQExport'
+    PackagePath     = 'C:\GPOTransfer\HQ.zip'
+}
+.\Move-GpoAcrossDomains.ps1 @source -WhatIf
+~~~
+
+The search covers the selected OU and every level below it. With `-IncludeInherited`, the script evaluates inheritance separately for each OU so links blocked in one branch can still appear for another. The package contains one backup per GPO GUID. In `SourceLinks.csv`, `ScopeOU` identifies the OU being evaluated and `LinkedAt` identifies the container where the link was configured. The manifest lists all scanned OUs, including those with no matching links.
+
+Remove `-WhatIf` to export, then use the same destination import workflow with the copied ZIP. Imported GPOs remain unlinked. Use the source link inventory to recreate the desired links against the corresponding destination OUs.
 
 ## Folder transfer alternative
 
@@ -133,7 +154,8 @@ With no `-PackagePath`, import expects an existing folder containing Manifest.js
 | `-GpoName` | Export | Source display name. Specify this or GpoId, not both. |
 | `-GpoId` | Export | Source GPO GUID, not a backup GUID. |
 | `-SourceOU` | Export | OU distinguished name. Use instead of GpoName or GpoId. |
-| `-IncludeInherited` | OU export | Adds parent OU and domain links applicable by inheritance. |
+| `-IncludeInherited` | OU export | Adds parent OU and domain links applicable by inheritance for each scanned OU. |
+| `-IncludeChildOUs` | OU export | Scans the selected OU and every descendant OU. Requires the source host's ActiveDirectory module. |
 | `-TargetName` | Import | Overrides the destination name for a single GPO. |
 | `-TargetNamePrefix` | Import | Prepends a string to each source display name. Omit both naming options to keep source names. |
 | `-MigrationTable` | Import | Local path to a reviewed .migtable file. |
@@ -183,7 +205,7 @@ This is recovery of the destination GPO backed up before overwrite, not a cross-
 | Export folder / ZIP: Manifest.json | Source metadata, source GPO ID, exact backup ID, export timestamp. No credentials. |
 | Export folder / ZIP: Backup | Native GPO backup used for import. |
 | Export folder / ZIP: Source.html, Source.xml | Source policy reports for review. |
-| OU export folder / ZIP: SourceLinks.csv | Direct and selected inherited link inventory. |
+| OU export folder / ZIP: SourceLinks.csv | Direct and selected inherited links, with separate columns for the evaluated OU and the link location. |
 | OU export folder / ZIP: SourceReports/&lt;source GPO GUID&gt; | Per-GPO HTML and XML reports. |
 | Import folder: Import-&lt;timestamp&gt;-&lt;unique-id&gt; | Destination run folder. |
 | Run folder: Destination.html, Destination.xml | Imported policy reports. OU imports place these in per-GPO GUID subfolders. |

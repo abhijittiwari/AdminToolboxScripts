@@ -35,11 +35,14 @@ search/replace for domain strings, DNS names, certificates, or script contents.
 External files referenced by policy must be migrated separately.
 
 Use SourceOU with the OU distinguished name to export its direct links, including
-disabled links. IncludeInherited adds applicable parent OU and domain links
-reported by Get-GPInheritance. Child OUs and site links are outside this scope.
+disabled links. IncludeChildOUs adds all descendant OUs and requires the
+ActiveDirectory PowerShell module on the source host. IncludeInherited adds
+applicable parent OU and domain links for each selected OU.
 Link metadata is recorded for review. It is never replayed on the destination.
 Use TargetNamePrefix to give the imported GPOs a consistent staging prefix.
 
+.EXAMPLE
+.\Move-GpoAcrossDomains.ps1 -Mode Export -Domain old.example.com -Server dc01.old.example.com -SourceOU 'OU=HQ,DC=old,DC=example,DC=com' -IncludeChildOUs -Path C:\GPOTransfer\HQExport -PackagePath C:\GPOTransfer\HQ.zip -WhatIf
 .EXAMPLE
 .\Move-GpoAcrossDomains.ps1 -Mode Export -Domain old.example.com -Server dc01.old.example.com -SourceOU 'OU=Workstations,DC=old,DC=example,DC=com' -Path C:\GPOTransfer\OUExport -PackagePath C:\GPOTransfer\Workstations.zip
 .EXAMPLE
@@ -72,7 +75,8 @@ param(
     [switch]$AllowOverwrite,
     [string]$SourceOU,
     [switch]$IncludeInherited,
-    [string]$TargetNamePrefix
+    [string]$TargetNamePrefix,
+    [switch]$IncludeChildOUs
 )
 
 Set-StrictMode -Version Latest
@@ -94,7 +98,9 @@ if ($Mode -eq 'Export') {
     if ($selectorCount -ne 1) {
         throw 'Specify exactly one of -GpoName, -GpoId or -SourceOU for Export.'
     }
-    if ($IncludeInherited -and -not $SourceOU) { throw '-IncludeInherited requires -SourceOU.' }
+    if (($IncludeInherited -or $IncludeChildOUs) -and -not $SourceOU) {
+        throw '-IncludeInherited and -IncludeChildOUs require -SourceOU.'
+    }
     if ($TargetName -or $TargetNamePrefix -or $MigrationTable -or $AllowOverwrite) {
         throw 'TargetName, TargetNamePrefix, MigrationTable and AllowOverwrite are Import-only parameters.'
     }
@@ -110,47 +116,65 @@ if ($Mode -eq 'Export') {
         }
     }
     $sourceScope = $null
-    $linkRows = @()
+    $linkRows = [System.Collections.Generic.List[object]]::new()
     if ($SourceOU) {
         $SourceOU = $SourceOU.Trim()
         if ($SourceOU -notmatch '^OU=') { throw '-SourceOU must be an OU distinguished name.' }
         $sourceScope = Get-GPInheritance -Target $SourceOU @context
-        $links = @($sourceScope.GpoLinks | Where-Object { $null -ne $_ })
-        $directCount = $links.Count
-        if ($IncludeInherited) {
-            $links += @($sourceScope.InheritedGpoLinks | Where-Object { $null -ne $_ })
-        }
-        $seenLinks = @{}
+        $scopes = @(
+            $sourceScope
+            if ($IncludeChildOUs) {
+                Import-Module ActiveDirectory -ErrorAction Stop
+                $childOUs = Get-ADOrganizationalUnit -Filter * -SearchBase $sourceScope.Path -SearchScope Subtree -Server $Server -ErrorAction Stop |
+                    Sort-Object -Property DistinguishedName
+                foreach ($childOU in $childOUs) {
+                    if ($childOU.DistinguishedName -ine $sourceScope.Path) {
+                        Get-GPInheritance -Target $childOU.DistinguishedName @context
+                    }
+                }
+            }
+        )
         $seenGpos = @{}
-        $gpos = @(for ($i = 0; $i -lt $links.Count; $i++) {
-            $link = $links[$i]
-            if ($link.GpoDomainName -ine $Domain) {
-                throw "GPO '$($link.DisplayName)' is stored in '$($link.GpoDomainName)'. Export it separately from its owning domain."
+        $gpos = @(foreach ($scope in $scopes) {
+            $links = @($scope.GpoLinks | Where-Object { $null -ne $_ })
+            $directCount = $links.Count
+            if ($IncludeInherited) {
+                $links += @($scope.InheritedGpoLinks | Where-Object { $null -ne $_ })
             }
-            $linkId = [guid]$link.GpoId
-            $linkKey = "$linkId|$($link.Target)"
-            if ($seenLinks.ContainsKey($linkKey)) { continue }
-            $seenLinks[$linkKey] = $true
-            $linkRows += [pscustomobject]@{
-                SourceGpoId = $linkId.ToString()
-                DisplayName = $link.DisplayName
-                LinkedAt = $link.Target
-                Inherited = $i -ge $directCount
-                Order = $link.Order
-                Enabled = $link.Enabled
-                Enforced = $link.Enforced
-            }
-            if (-not $seenGpos.ContainsKey($linkId)) {
-                $seenGpos[$linkId] = $true
-                Get-GPO -Guid $linkId @context
+
+            # An inherited-link result can repeat a direct link for this OU.
+            $seenLinks = @{}
+            for ($i = 0; $i -lt $links.Count; $i++) {
+                $link = $links[$i]
+                if ($link.GpoDomainName -ine $Domain) {
+                    throw "GPO '$($link.DisplayName)' is stored in '$($link.GpoDomainName)'. Export it separately from its owning domain."
+                }
+                $linkId = [guid]$link.GpoId
+                $linkKey = "$linkId|$($link.Target)"
+                if ($seenLinks.ContainsKey($linkKey)) { continue }
+                $seenLinks[$linkKey] = $true
+                $linkRows.Add([pscustomobject]@{
+                    SourceGpoId = $linkId.ToString()
+                    DisplayName = $link.DisplayName
+                    LinkedAt = $link.Target
+                    Inherited = $i -ge $directCount
+                    Order = $link.Order
+                    Enabled = $link.Enabled
+                    Enforced = $link.Enforced
+                    ScopeOU = $scope.Path
+                })
+                if (-not $seenGpos.ContainsKey($linkId)) {
+                    $seenGpos[$linkId] = $true
+                    Get-GPO -Guid $linkId @context
+                }
             }
         })
         if ($gpos.Count -eq 0) { throw "No GPO links matched the requested scope: $SourceOU" }
         foreach ($linkRow in $linkRows) {
-            Write-Host ("{0} | Linked at {1} | Order {2} | Enabled {3} | Enforced {4}" -f
-                $linkRow.DisplayName, $linkRow.LinkedAt, $linkRow.Order, $linkRow.Enabled, $linkRow.Enforced)
+            Write-Host ("{0} | OU {1} | Linked at {2} | Order {3} | Enabled {4} | Enforced {5}" -f
+                $linkRow.DisplayName, $linkRow.ScopeOU, $linkRow.LinkedAt, $linkRow.Order, $linkRow.Enabled, $linkRow.Enforced)
         }
-        $exportTarget = "$Domain / $SourceOU ($($gpos.Count) GPOs)"
+        $exportTarget = "$Domain / $SourceOU ($($gpos.Count) GPOs across $($scopes.Count) OU(s))"
     } else {
         if ($GpoId -ne [guid]::Empty) { $gpos = @(Get-GPO -Guid $GpoId @context) }
         else { $gpos = @(Get-GPO -Name $GpoName @context) }
@@ -187,6 +211,15 @@ if ($Mode -eq 'Export') {
         $manifestData['SourceOU'] = $sourceScope.Path
         $manifestData['IncludeInherited'] = [bool]$IncludeInherited
         $manifestData['GpoInheritanceBlocked'] = [string]$sourceScope.GpoInheritanceBlocked
+        if ($IncludeChildOUs) {
+            $manifestData['IncludeChildOUs'] = $true
+            $manifestData['SourceOUs'] = @(foreach ($scope in $scopes) {
+                [pscustomobject]@{
+                    DistinguishedName = $scope.Path
+                    GpoInheritanceBlocked = [string]$scope.GpoInheritanceBlocked
+                }
+            })
+        }
         $manifestData['Gpos'] = $exported
         $linkRows | Export-Csv -LiteralPath (Join-Path $Path 'SourceLinks.csv') -NoTypeInformation -Encoding UTF8
     } else {
@@ -213,8 +246,8 @@ if ($Mode -eq 'Export') {
     return
 }
 
-if ($GpoName -or $GpoId -ne [guid]::Empty -or $SourceOU -or $IncludeInherited) {
-    throw 'GpoName, GpoId, SourceOU and IncludeInherited are Export-only parameters.'
+if ($GpoName -or $GpoId -ne [guid]::Empty -or $SourceOU -or $IncludeInherited -or $IncludeChildOUs) {
+    throw 'GpoName, GpoId, SourceOU, IncludeInherited and IncludeChildOUs are Export-only parameters.'
 }
 if ($TargetName -and $TargetNamePrefix) {
     throw 'Specify either -TargetName or -TargetNamePrefix.'
