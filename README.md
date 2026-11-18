@@ -41,7 +41,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Export-AdForestInventory.ps1` | PowerShell | Inventories forest/domain topology: functional levels, schema version, UPN suffixes, and the DC inventory with FSMO roles. |
 | `Export-AdSiteTopologyInventory.ps1` | PowerShell | Inventories AD Sites & Services: sites, subnets, site links, and replication connections (subnet-to-site mapping). |
 | `Export-AdTrustInventory.ps1` | PowerShell | Inventories domain/forest trusts with direction, type, and SID-filtering/selective-auth posture for SIDHistory coexistence design. |
-| `Move-GpoAcrossDomains.ps1` | Windows PowerShell 5.1 | Exports one GPO and imports its settings across domains using independent hosts and an optional portable ZIP; destination import creates or modifies a GPO. |
+| `Move-GpoAcrossDomains.ps1` | Windows PowerShell 5.1 | Exports a single GPO or the GPOs linked to an OU as a folder or ZIP, then imports their settings from a separate host; destination import creates or modifies a GPO. |
 | `Export-AdOuGpoInventory.ps1` | PowerShell | Inventories the OU tree and GPOs (links, filtering, configured settings) and flags Intune-migration candidates. |
 | `Export-AdObjectPopulationInventory.ps1` | PowerShell | Reports user/group/computer volumetrics: active vs disabled, stale, group scope/type, and server-vs-workstation split. |
 | `Export-AdPrivilegedIdentityInventory.ps1` | PowerShell | Inventories privileged group members, adminCount objects, and service/non-human accounts with Kerberos-delegation type. |
@@ -990,7 +990,7 @@ Console output is grouped into sections:
 
 ## Move-GpoAcrossDomains.ps1
 
-Exports a GPO under the source-domain account, then imports the copied backup under the destination-domain account. The two stages can run independently on different hosts; the destination host does not need connectivity to the source. Supports folder or ZIP transfer, an optional migration table, WhatIf, and pre-overwrite backups. A new target is unlinked; overwriting an existing linked target can affect clients.
+Exports a single GPO or the GPOs linked to an OU under the source-domain account, then imports the copied backups under the destination-domain account. OU export supports direct links and optional inheritance. The two stages can run independently on different hosts; the destination host does not need connectivity to the source. Supports folder or ZIP transfer, an optional migration table, WhatIf, and pre-overwrite backups. A new target is unlinked; overwriting an existing linked target can affect clients.
 
 See the [GPO migration guide](docs/gpo-migration.md) for prerequisites, credentials, two-host commands, parameter meanings, limitations, troubleshooting and recovery. The source GPO is retained.
 

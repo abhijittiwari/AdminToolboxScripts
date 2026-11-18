@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Exports one GPO, or imports a previously exported GPO into another domain.
+Exports one GPO or the GPOs linked to an OU, and imports them into another domain.
 .DESCRIPTION
 Run in Windows PowerShell 5.1 with the GroupPolicy module (GPMC/RSAT).
 Uses the current Windows account: run Export in the source domain and Import
@@ -34,6 +34,16 @@ can map supported security-principal/UNC references; it is not a general
 search/replace for domain strings, DNS names, certificates, or script contents.
 External files referenced by policy must be migrated separately.
 
+Use SourceOU with the OU distinguished name to export its direct links, including
+disabled links. IncludeInherited adds applicable parent OU and domain links
+reported by Get-GPInheritance. Child OUs and site links are outside this scope.
+Link metadata is recorded for review. It is never replayed on the destination.
+Use TargetNamePrefix to give the imported GPOs a consistent staging prefix.
+
+.EXAMPLE
+.\Move-GpoAcrossDomains.ps1 -Mode Export -Domain old.example.com -Server dc01.old.example.com -SourceOU 'OU=Workstations,DC=old,DC=example,DC=com' -Path C:\GPOTransfer\OUExport -PackagePath C:\GPOTransfer\Workstations.zip
+.EXAMPLE
+.\Move-GpoAcrossDomains.ps1 -Mode Import -Domain new.example.com -Server dc01.new.example.com -Path D:\GPOTransfer\OUImport -PackagePath D:\GPOTransfer\Workstations.zip -TargetNamePrefix 'Migrated - ' -WhatIf
 .EXAMPLE
 .\Move-GpoAcrossDomains.ps1 -Mode Export -Domain old.example.com -Server dc01.old.example.com -GpoName 'Workstation Policy' -Path C:\GPOTransfer\Export1 -PackagePath C:\GPOTransfer\Workstation.zip
 .EXAMPLE
@@ -59,7 +69,10 @@ param(
     [guid]$GpoId = [guid]::Empty,
     [string]$TargetName,
     [string]$MigrationTable,
-    [switch]$AllowOverwrite
+    [switch]$AllowOverwrite,
+    [string]$SourceOU,
+    [switch]$IncludeInherited,
+    [string]$TargetNamePrefix
 )
 
 Set-StrictMode -Version Latest
@@ -74,11 +87,16 @@ if ($PackagePath) {
 }
 
 if ($Mode -eq 'Export') {
-    if (([bool]$GpoName) -eq ($GpoId -ne [guid]::Empty)) {
-        throw 'Specify exactly one of -GpoName or -GpoId for Export.'
+    if ([string]::IsNullOrWhiteSpace($SourceOU)) { $SourceOU = '' }
+    $selectorCount = [int](-not [string]::IsNullOrWhiteSpace($GpoName)) +
+                     [int]($GpoId -ne [guid]::Empty) +
+                     [int][bool]$SourceOU
+    if ($selectorCount -ne 1) {
+        throw 'Specify exactly one of -GpoName, -GpoId or -SourceOU for Export.'
     }
-    if ($TargetName -or $MigrationTable -or $AllowOverwrite) {
-        throw 'TargetName, MigrationTable and AllowOverwrite are Import-only parameters.'
+    if ($IncludeInherited -and -not $SourceOU) { throw '-IncludeInherited requires -SourceOU.' }
+    if ($TargetName -or $TargetNamePrefix -or $MigrationTable -or $AllowOverwrite) {
+        throw 'TargetName, TargetNamePrefix, MigrationTable and AllowOverwrite are Import-only parameters.'
     }
     if (Test-Path -LiteralPath $Path) {
         throw "Export folder already exists. Choose a new folder: $Path"
@@ -91,25 +109,92 @@ if ($Mode -eq 'Export') {
             throw 'PackagePath must be outside the export folder.'
         }
     }
-    if ($GpoId -ne [guid]::Empty) { $gpo = Get-GPO -Guid $GpoId @context }
-    else { $gpo = Get-GPO -Name $GpoName @context }
+    $sourceScope = $null
+    $linkRows = @()
+    if ($SourceOU) {
+        $SourceOU = $SourceOU.Trim()
+        if ($SourceOU -notmatch '^OU=') { throw '-SourceOU must be an OU distinguished name.' }
+        $sourceScope = Get-GPInheritance -Target $SourceOU @context
+        $links = @($sourceScope.GpoLinks | Where-Object { $null -ne $_ })
+        $directCount = $links.Count
+        if ($IncludeInherited) {
+            $links += @($sourceScope.InheritedGpoLinks | Where-Object { $null -ne $_ })
+        }
+        $seenLinks = @{}
+        $seenGpos = @{}
+        $gpos = @(for ($i = 0; $i -lt $links.Count; $i++) {
+            $link = $links[$i]
+            if ($link.GpoDomainName -ine $Domain) {
+                throw "GPO '$($link.DisplayName)' is stored in '$($link.GpoDomainName)'. Export it separately from its owning domain."
+            }
+            $linkId = [guid]$link.GpoId
+            $linkKey = "$linkId|$($link.Target)"
+            if ($seenLinks.ContainsKey($linkKey)) { continue }
+            $seenLinks[$linkKey] = $true
+            $linkRows += [pscustomobject]@{
+                SourceGpoId = $linkId.ToString()
+                DisplayName = $link.DisplayName
+                LinkedAt = $link.Target
+                Inherited = $i -ge $directCount
+                Order = $link.Order
+                Enabled = $link.Enabled
+                Enforced = $link.Enforced
+            }
+            if (-not $seenGpos.ContainsKey($linkId)) {
+                $seenGpos[$linkId] = $true
+                Get-GPO -Guid $linkId @context
+            }
+        })
+        if ($gpos.Count -eq 0) { throw "No GPO links matched the requested scope: $SourceOU" }
+        foreach ($linkRow in $linkRows) {
+            Write-Host ("{0} | Linked at {1} | Order {2} | Enabled {3} | Enforced {4}" -f
+                $linkRow.DisplayName, $linkRow.LinkedAt, $linkRow.Order, $linkRow.Enabled, $linkRow.Enforced)
+        }
+        $exportTarget = "$Domain / $SourceOU ($($gpos.Count) GPOs)"
+    } else {
+        if ($GpoId -ne [guid]::Empty) { $gpos = @(Get-GPO -Guid $GpoId @context) }
+        else { $gpos = @(Get-GPO -Name $GpoName @context) }
+        $exportTarget = "$Domain / $($gpos[0].DisplayName)"
+    }
 
-    if (-not $PSCmdlet.ShouldProcess("$Domain / $($gpo.DisplayName)", "Export to $Path")) { return }
+    if (-not $PSCmdlet.ShouldProcess($exportTarget, "Export to $Path")) { return }
     $backupPath = Join-Path $Path 'Backup'
     $null = New-Item -ItemType Directory -Path $backupPath -Force
-    $backup = Backup-GPO -Guid $gpo.Id -Path $backupPath @context
-    Get-GPOReport -Guid $gpo.Id -ReportType Html -Path (Join-Path $Path 'Source.html') @context
-    Get-GPOReport -Guid $gpo.Id -ReportType Xml -Path (Join-Path $Path 'Source.xml') @context
-    [ordered]@{
+    $manifestData = [ordered]@{
         SchemaVersion = 1
         SourceDomain = $Domain
         SourceServer = $Server
         SourceHost = $env:COMPUTERNAME
-        SourceName = $gpo.DisplayName
-        SourceGpoId = $gpo.Id.ToString()
-        BackupId = $backup.Id.ToString()
         ExportedUtc = [DateTime]::UtcNow.ToString('o')
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Path 'Manifest.json') -Encoding UTF8
+    }
+    $exported = @(foreach ($gpo in $gpos) {
+        $backup = Backup-GPO -Guid $gpo.Id -Path $backupPath @context
+        $reportPath = $Path
+        if ($SourceOU) {
+            $reportPath = Join-Path (Join-Path $Path 'SourceReports') $gpo.Id.ToString()
+            $null = New-Item -ItemType Directory -Path $reportPath -Force
+        }
+        $null = Get-GPOReport -Guid $gpo.Id -ReportType Html -Path (Join-Path $reportPath 'Source.html') @context
+        $null = Get-GPOReport -Guid $gpo.Id -ReportType Xml -Path (Join-Path $reportPath 'Source.xml') @context
+        [pscustomobject]@{
+            SourceName = $gpo.DisplayName
+            SourceGpoId = $gpo.Id.ToString()
+            BackupId = $backup.Id.ToString()
+        }
+    })
+    if ($SourceOU) {
+        $manifestData.SchemaVersion = 2
+        $manifestData['SourceOU'] = $sourceScope.Path
+        $manifestData['IncludeInherited'] = [bool]$IncludeInherited
+        $manifestData['GpoInheritanceBlocked'] = [string]$sourceScope.GpoInheritanceBlocked
+        $manifestData['Gpos'] = $exported
+        $linkRows | Export-Csv -LiteralPath (Join-Path $Path 'SourceLinks.csv') -NoTypeInformation -Encoding UTF8
+    } else {
+        $manifestData['SourceName'] = $exported[0].SourceName
+        $manifestData['SourceGpoId'] = $exported[0].SourceGpoId
+        $manifestData['BackupId'] = $exported[0].BackupId
+    }
+    $manifestData | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Path 'Manifest.json') -Encoding UTF8
     if ($PackagePath) {
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $PackagePath) -Force
         try {
@@ -122,14 +207,20 @@ if ($Mode -eq 'Export') {
     } else {
         Write-Host "Export complete. Copy this entire folder and this script to the destination host: $Path"
     }
-    [pscustomobject]@{ Mode = 'Export'; GpoName = $gpo.DisplayName; BackupId = $backup.Id; Path = $Path; PackagePath = $PackagePath }
+    foreach ($item in $exported) {
+        [pscustomobject]@{ Mode = 'Export'; GpoName = $item.SourceName; BackupId = [guid]$item.BackupId; Path = $Path; PackagePath = $PackagePath }
+    }
     return
 }
 
-if ($GpoName -or $GpoId -ne [guid]::Empty) {
-    throw 'GpoName and GpoId are Export-only parameters; use TargetName for Import.'
+if ($GpoName -or $GpoId -ne [guid]::Empty -or $SourceOU -or $IncludeInherited) {
+    throw 'GpoName, GpoId, SourceOU and IncludeInherited are Export-only parameters.'
+}
+if ($TargetName -and $TargetNamePrefix) {
+    throw 'Specify either -TargetName or -TargetNamePrefix.'
 }
 $manifestPath = Join-Path $Path 'Manifest.json'
+$zipEntryPaths = @{}
 if ($PackagePath) {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "ZIP not found: $PackagePath" }
     if (Test-Path -LiteralPath $Path) { throw "Extraction folder already exists. Choose a new -Path, or omit -PackagePath to reuse an extracted export: $Path" }
@@ -141,29 +232,58 @@ if ($PackagePath) {
         $reader = [IO.StreamReader]::new($entry.Open())
         try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json }
         finally { $reader.Dispose() }
-        $expectedEntry = 'Backup/{' + ([guid]$manifest.BackupId).ToString() + '}/bkupInfo.xml'
-        $foundBackup = @($archive.Entries | Where-Object { $_.FullName.Replace('\','/') -ieq $expectedEntry })
-        if ($foundBackup.Count -ne 1) { throw 'The backup referenced by Manifest.json is missing or duplicated in the ZIP.' }
         $extractPrefix = $Path.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
         foreach ($zipEntry in $archive.Entries) {
             $entryPath = [IO.Path]::GetFullPath([IO.Path]::Combine($Path, $zipEntry.FullName))
             if (-not $entryPath.StartsWith($extractPrefix, [StringComparison]::OrdinalIgnoreCase)) {
                 throw "ZIP entry points outside the extraction folder: $($zipEntry.FullName)"
             }
+            $normalizedPath = $zipEntry.FullName.Replace('\','/')
+            if ($zipEntryPaths.ContainsKey($normalizedPath)) { throw "Duplicate ZIP entry: $normalizedPath" }
+            $zipEntryPaths[$normalizedPath] = $true
         }
     } finally { $archive.Dispose() }
 } else {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 }
-if ($manifest.SchemaVersion -ne 1) { throw 'Unsupported export manifest version.' }
-$backupId = [guid]$manifest.BackupId
-$backupPath = Join-Path $Path 'Backup'
-if (-not $PackagePath) {
-    $backupInfo = Join-Path $backupPath ('{' + $backupId.ToString() + '}\bkupInfo.xml')
-    if (-not (Test-Path -LiteralPath $backupInfo -PathType Leaf)) { throw 'The backup referenced by Manifest.json is missing.' }
+$isOuPackage = $manifest.SchemaVersion -eq 2
+switch ($manifest.SchemaVersion) {
+    1 { $exported = @($manifest) }
+    2 { $exported = @($manifest.Gpos | Where-Object { $null -ne $_ }) }
+    default { throw 'Unsupported export manifest version.' }
 }
-if ([string]::IsNullOrWhiteSpace($TargetName)) { $TargetName = [string]$manifest.SourceName }
-if ([string]::IsNullOrWhiteSpace($TargetName)) { throw 'Target GPO name is empty.' }
+if ($exported.Count -eq 0) { throw 'The manifest does not contain any GPOs.' }
+if ($TargetName -and $exported.Count -gt 1) { throw '-TargetName applies to one GPO. Use -TargetNamePrefix for a batch.' }
+
+$backupPath = Join-Path $Path 'Backup'
+$seenBackupIds = @{}
+$seenSourceIds = @{}
+$seenTargetNames = @{}
+$plan = @(foreach ($item in $exported) {
+    $backupId = [guid]$item.BackupId
+    $sourceId = [guid]$item.SourceGpoId
+    if ($backupId -eq [guid]::Empty -or $sourceId -eq [guid]::Empty -or
+        $seenBackupIds.ContainsKey($backupId) -or $seenSourceIds.ContainsKey($sourceId)) {
+        throw 'The manifest contains an empty or duplicate GPO or backup ID.'
+    }
+    $seenBackupIds[$backupId] = $true
+    $seenSourceIds[$sourceId] = $true
+    $backupFolderName = $backupId.ToString('B')
+    if ($PackagePath) {
+        if (-not $zipEntryPaths.ContainsKey("Backup/$backupFolderName/bkupInfo.xml")) {
+            throw "The package is missing backup $backupId."
+        }
+    } else {
+        $backupInfo = Join-Path (Join-Path $backupPath $backupFolderName) 'bkupInfo.xml'
+        if (-not (Test-Path -LiteralPath $backupInfo -PathType Leaf)) { throw "The export is missing backup $backupId." }
+    }
+    $name = $TargetNamePrefix + [string]$item.SourceName
+    if (-not [string]::IsNullOrWhiteSpace($TargetName)) { $name = $TargetName }
+    if ([string]::IsNullOrWhiteSpace($name)) { throw 'Target GPO name is empty.' }
+    if ($seenTargetNames.ContainsKey($name)) { throw "The package maps multiple GPOs to '$name'." }
+    $seenTargetNames[$name] = $true
+    [pscustomobject]@{ BackupId = $backupId; SourceId = $sourceId; TargetName = $name; Existing = $null; ReportsPath = $null }
+})
 if ($MigrationTable) {
     $MigrationTable = (Resolve-Path -LiteralPath $MigrationTable).ProviderPath
     if (-not (Test-Path -LiteralPath $MigrationTable -PathType Leaf)) { throw 'MigrationTable must be a file.' }
@@ -173,17 +293,35 @@ if ($MigrationTable) {
 
 # Enumerate successfully before deciding that the target does not exist.
 # Do not treat an arbitrary access/connectivity failure as a missing GPO.
-$matches = @(Get-GPO -All @context | Where-Object { $_.DisplayName -eq $TargetName })
-if ($matches.Count -gt 1) { throw "Multiple target GPOs named '$TargetName'; resolve the duplicate names first." }
-$existing = $null
-if ($matches.Count -eq 1) { $existing = $matches[0] }
-if ($existing -and -not $AllowOverwrite) {
-    throw "Target '$TargetName' already exists. Choose another name or explicitly use -AllowOverwrite."
+$destinationByName = @{}
+foreach ($destinationGpo in (Get-GPO -All @context)) {
+    $displayName = $destinationGpo.DisplayName
+    if (-not $destinationByName.ContainsKey($displayName)) {
+        $destinationByName[$displayName] = @()
+    }
+    $destinationByName[$displayName] += $destinationGpo
 }
-$action = 'Create an unlinked GPO and import settings'
-if ($existing) { $action = 'Back up target and overwrite its settings (existing links remain active)' }
+$conflicts = @(foreach ($entry in $plan) {
+    if (-not $destinationByName.ContainsKey($entry.TargetName)) { continue }
+    $matchedGpos = $destinationByName[$entry.TargetName]
+    if ($matchedGpos.Count -gt 1) { throw "Multiple target GPOs named '$($entry.TargetName)'; resolve the duplicate names first." }
+    if ($matchedGpos.Count -eq 1) {
+        $entry.Existing = $matchedGpos[0]
+        if (-not $AllowOverwrite) { $entry.TargetName }
+    }
+})
+if ($conflicts.Count -gt 0) {
+    throw "Target GPOs already exist: $($conflicts -join ', '). Choose different names or explicitly use -AllowOverwrite."
+}
+foreach ($entry in $plan) {
+    if ($entry.Existing) { $operation = 'Back up and overwrite' }
+    else { $operation = 'Create unlinked and import' }
+    Write-Host ("{0} | {1} | Source GPO {2}" -f $operation, $entry.TargetName, $entry.SourceId)
+}
+$action = 'Import GPO settings'
+if ($AllowOverwrite) { $action += ' with overwrite enabled (existing links remain active)' }
 if ($PackagePath) { $action = "Extract $PackagePath into $Path; $action" }
-if (-not $PSCmdlet.ShouldProcess("$Domain / $TargetName", $action)) { return }
+if (-not $PSCmdlet.ShouldProcess("$Domain ($($plan.Count) GPOs)", $action)) { return }
 
 if ($PackagePath) {
     # All input comes from the copied ZIP. No connection to the source is made.
@@ -192,36 +330,52 @@ if ($PackagePath) {
 $runName = 'Import-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
 $runPath = Join-Path $Path $runName
 $null = New-Item -ItemType Directory -Path $runPath
-if ($existing) {
-    $rollbackPath = Join-Path $runPath 'BeforeImport'
-    $null = New-Item -ItemType Directory -Path $rollbackPath
-    $rollback = Backup-GPO -Guid $existing.Id -Path $rollbackPath @context
-    [pscustomobject]@{ Domain = $Domain; Server = $Server; TargetId = $existing.Id.ToString(); BackupId = $rollback.Id.ToString() } |
-        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runPath 'Rollback.json') -Encoding UTF8
-    Write-Host "Pre-import backup retained at: $rollbackPath"
-    $target = $existing
-} else {
-    # New-GPO refuses an existing name; import by GUID to pin the selected object.
-    $target = New-GPO -Name $TargetName @context
+Write-Host "Import run folder: $runPath"
+
+# Back up every overwrite target before changing any destination GPO.
+foreach ($entry in $plan) {
+    $entry.ReportsPath = $runPath
+    if ($isOuPackage) {
+        $entry.ReportsPath = Join-Path $runPath $entry.SourceId.ToString()
+        $null = New-Item -ItemType Directory -Path $entry.ReportsPath
+    }
+    if ($entry.Existing) {
+        $rollbackPath = Join-Path $entry.ReportsPath 'BeforeImport'
+        $null = New-Item -ItemType Directory -Path $rollbackPath
+        $rollback = Backup-GPO -Guid $entry.Existing.Id -Path $rollbackPath @context
+        [pscustomobject]@{ Domain = $Domain; Server = $Server; TargetId = $entry.Existing.Id.ToString(); BackupId = $rollback.Id.ToString() } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $entry.ReportsPath 'Rollback.json') -Encoding UTF8
+        Write-Host "Pre-import backup for '$($entry.TargetName)' retained at: $rollbackPath"
+    }
 }
 
-$importParams = @{ BackupId = $backupId; Path = $backupPath; TargetGuid = $target.Id }
-if ($MigrationTable) { $importParams.MigrationTable = $MigrationTable }
-try {
-    $null = Import-GPO @importParams @context
-} catch {
-    Write-Warning "Import failed. Target GUID: $($target.Id). It may contain partial settings; inspect it before retrying. Backups/reports retained at $runPath."
-    throw
+$completed = 0
+foreach ($entry in $plan) {
+    $target = $entry.Existing
+    try {
+        if (-not $target) {
+            # New-GPO refuses an existing name. Import by GUID to pin the selected object.
+            $target = New-GPO -Name $entry.TargetName @context
+        }
+        $importParams = @{ BackupId = $entry.BackupId; Path = $backupPath; TargetGuid = $target.Id }
+        if ($MigrationTable) { $importParams.MigrationTable = $MigrationTable }
+        $null = Import-GPO @importParams @context
+    } catch {
+        Write-Warning "Stopped at '$($entry.TargetName)' after $completed completed import(s). Backups and reports are retained at $runPath."
+        if ($target) { Write-Warning "Inspect target $($target.Id) for partial settings before retrying." }
+        throw
+    }
+    $completed++
+    try {
+        $null = Get-GPOReport -Guid $target.Id -ReportType Html -Path (Join-Path $entry.ReportsPath 'Destination.html') @context
+        $null = Get-GPOReport -Guid $target.Id -ReportType Xml -Path (Join-Path $entry.ReportsPath 'Destination.xml') @context
+    } catch {
+        Write-Warning "Settings imported for '$($entry.TargetName)', but report generation failed: $($_.Exception.Message)"
+    }
+    [pscustomobject]@{
+        Mode = 'Import'; Domain = $Domain; GpoName = $entry.TargetName
+        GpoId = $target.Id; OverwroteExisting = [bool]$entry.Existing; ReportsPath = $entry.ReportsPath
+        SourceGpoId = $entry.SourceId
+    }
 }
-# Reports are a review aid, not proof of settings equivalence or client application.
-try {
-    Get-GPOReport -Guid $target.Id -ReportType Html -Path (Join-Path $runPath 'Destination.html') @context
-    Get-GPOReport -Guid $target.Id -ReportType Xml -Path (Join-Path $runPath 'Destination.xml') @context
-} catch {
-    Write-Warning "Settings imported, but report generation failed: $($_.Exception.Message)"
-}
-Write-Host "Import complete. Review settings, filtering, delegation and WMI requirements before linking. Reports: $runPath"
-[pscustomobject]@{
-    Mode = 'Import'; Domain = $Domain; GpoName = $TargetName
-    GpoId = $target.Id; OverwroteExisting = [bool]$existing; ReportsPath = $runPath
-}
+Write-Host "Imported $completed GPO(s). Review settings, filtering, delegation and WMI requirements before linking. Reports: $runPath"

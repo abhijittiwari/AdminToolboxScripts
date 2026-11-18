@@ -2,7 +2,7 @@
 
 [Script](../Move-GpoAcrossDomains.ps1) · [Script reference](script-reference.md#move-gpoacrossdomainsps1)
 
-`Move-GpoAcrossDomains.ps1` backs up one GPO and imports its settings into another domain. Despite its name, it does **not** delete the source GPO. Export and import are independent operations and can run on different Windows hosts, at different times, with different accounts.
+`Move-GpoAcrossDomains.ps1` backs up one GPO or the GPOs linked to an OU and imports their settings into another domain. The source GPOs stay in place. Export and import can run on different Windows hosts, at different times, with different accounts.
 
 ## Requirements and credentials
 
@@ -73,6 +73,44 @@ Run the same command without `-WhatIf`. The extraction folder must not exist. A 
 
 Review the imported settings, security filtering, delegation, WMI requirements and user/computer configuration status before linking to a test OU. Configure the intended scope and verify resultant policy on test clients before wider deployment.
 
+## Migrate GPOs linked to an OU
+
+On the source host, specify the OU's distinguished name. Add `-WhatIf` to preview the selected links before writing the package.
+
+~~~powershell
+$source = @{
+    Mode        = 'Export'
+    Domain      = 'old.example.com'
+    Server      = 'dc01.old.example.com'
+    SourceOU    = 'OU=Workstations,OU=HQ,DC=old,DC=example,DC=com'
+    Path        = 'C:\GPOTransfer\WorkstationsExport'
+    PackagePath = 'C:\GPOTransfer\Workstations-GPOs.zip'
+}
+.\Move-GpoAcrossDomains.ps1 @source
+~~~
+
+By default, export selects every direct link on the chosen OU, including disabled links. Add `-IncludeInherited` to include links from parent OUs and the source domain that survive inheritance rules. Review the preview for domain-wide policies such as Default Domain Policy. Each GPO is backed up once by GUID, even if several selected links reference it. If a link references a GPO stored in a different domain, export that GPO separately from its owning domain.
+
+Child OU links and site-linked policies are outside the selection. Link inventory is independent of security filtering, WMI filtering and the resultant policy a particular user or computer receives. See [Get-GPInheritance](https://learn.microsoft.com/en-us/powershell/module/grouppolicy/get-gpinheritance) and [Group Policy processing](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/group-policy/group-policy-processing).
+
+Copy the ZIP and updated script to the destination host. Preview the import under your destination account.
+
+~~~powershell
+$destination = @{
+    Mode             = 'Import'
+    Domain           = 'new.example.com'
+    Server           = 'dc01.new.example.com'
+    Path             = 'D:\GPOTransfer\WorkstationsImport'
+    PackagePath      = 'D:\GPOTransfer\Workstations-GPOs.zip'
+    TargetNamePrefix = 'Migrated - '
+}
+.\Move-GpoAcrossDomains.ps1 @destination -WhatIf
+~~~
+
+After reviewing the GPO names and planned operations, rerun without `-WhatIf`. The prefix is optional and helps stage the entire batch under new names. The script checks the whole batch for missing backup entries and destination name conflicts before writing to the domain. Existing targets require `-AllowOverwrite`. When supplied, the script backs up all overwrite targets before the first import.
+
+New GPOs are unlinked. Use `SourceLinks.csv` to review the source location, link order, enabled state, and enforcement for each link. Recreate the desired links and filtering in GPMC after validating the settings. Preserve the destination OU hierarchy when mapping inherited policies, since linking every imported GPO to one OU can change precedence. The OU package requires this version of the script. Previous single-GPO packages remain supported.
+
 ## Folder transfer alternative
 
 Omit `-PackagePath` on export. Copy the entire export folder and the script to the destination host, then import from the copied folder:
@@ -94,7 +132,10 @@ With no `-PackagePath`, import expects an existing folder containing Manifest.js
 | `-PackagePath` | Both, optional | New ZIP on export, existing copied ZIP on import. |
 | `-GpoName` | Export | Source display name. Specify this or GpoId, not both. |
 | `-GpoId` | Export | Source GPO GUID, not a backup GUID. |
-| `-TargetName` | Import | Destination display name; defaults to the source name in the manifest. |
+| `-SourceOU` | Export | OU distinguished name. Use instead of GpoName or GpoId. |
+| `-IncludeInherited` | OU export | Adds parent OU and domain links applicable by inheritance. |
+| `-TargetName` | Import | Overrides the destination name for a single GPO. |
+| `-TargetNamePrefix` | Import | Prepends a string to each source display name. Omit both naming options to keep source names. |
 | `-MigrationTable` | Import | Local path to a reviewed .migtable file. |
 | `-AllowOverwrite` | Import | Permit replacing settings of an existing target after backing it up. |
 | `-WhatIf` | Both | Read-only preflight and action description. |
@@ -118,14 +159,14 @@ New targets receive destination defaults. On an existing target, its deployment 
 
 ## Existing GPOs, failures and recovery
 
-By default, a matching destination display name stops the import. Choose a new target name for a review copy. Use `-AllowOverwrite` only when you intend to replace the existing GPO's settings. The script backs it up first and saves a Rollback.json record.
+By default, a matching destination display name stops the import. Choose a new target name or prefix for review copies. Use `-AllowOverwrite` only when you intend to replace existing GPO settings. The script saves a pre-import backup and a Rollback.json record for each overwrite target.
 
-**Overwriting a linked GPO can affect clients through normal policy refresh.** The operation is not transactional. An import failure can leave partial settings; the script does not delete a new GPO or automatically roll back an existing one.
+**Overwriting a linked GPO can affect clients through normal policy refresh.** A batch stops at the first import failure. Earlier successful imports remain in place, and the failed GPO may contain partial settings. Review the results and the run folder before retrying. Rollback is manual.
 
 For an overwritten target, inspect the retained backup and restore it deliberately in the destination domain if needed:
 
 ```powershell
-# Use the actual import run folder printed by the script.
+# Use the ReportsPath of the specific GPO. OU runs have one GUID subfolder per GPO.
 $runPath = 'D:\GPOTransfer\Import1\Import-<timestamp>-<unique-id>'
 $rollback = Get-Content -LiteralPath (Join-Path $runPath 'Rollback.json') -Raw |
     ConvertFrom-Json
@@ -142,9 +183,11 @@ This is recovery of the destination GPO backed up before overwrite, not a cross-
 | Export folder / ZIP: Manifest.json | Source metadata, source GPO ID, exact backup ID, export timestamp. No credentials. |
 | Export folder / ZIP: Backup | Native GPO backup used for import. |
 | Export folder / ZIP: Source.html, Source.xml | Source policy reports for review. |
+| OU export folder / ZIP: SourceLinks.csv | Direct and selected inherited link inventory. |
+| OU export folder / ZIP: SourceReports/&lt;source GPO GUID&gt; | Per-GPO HTML and XML reports. |
 | Import folder: Import-&lt;timestamp&gt;-&lt;unique-id&gt; | Destination run folder. |
-| Run folder: Destination.html, Destination.xml | Imported policy reports when report generation succeeds. |
-| Run folder: BeforeImport and Rollback.json | Existing destination backup and recovery metadata when overwriting. |
+| Run folder: Destination.html, Destination.xml | Imported policy reports. OU imports place these in per-GPO GUID subfolders. |
+| Run folder: BeforeImport and Rollback.json | Existing destination backup and recovery metadata when overwriting. OU imports place these in the corresponding GUID subfolder. |
 
 An import can succeed even if report generation fails; check warnings. Compare source and destination reports in light of intended mappings. Reports alone do not establish settings equivalence or successful client application.
 

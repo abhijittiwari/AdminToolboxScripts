@@ -19,7 +19,7 @@ cd AdminToolboxScripts
 | Assess AD / Entra ID / DNS / AD CS security hardening (Appendix B controls) | `Invoke-AdSecurityHardeningAssessment.ps1` (or the individual `Export-*HardeningAssessment.ps1` / `Export-*Assessment.ps1` modules) |
 | Gather divestiture discovery evidence (forest, trusts, GPOs, hybrid identity, on-prem Exchange, M365 volumetrics) | `Invoke-AdDivestitureDiscovery.ps1` (or the individual `Export-*Inventory.ps1` modules) |
 | Confirm the tenant's authentication model (Managed vs Federated/ADFS) | `Export-EntraAuthenticationModel.ps1` |
-| Migrate one GPO between domains, including from separate hosts | [`Move-GpoAcrossDomains.ps1`](gpo-migration.md) |
+| Migrate one GPO or the GPOs linked to an OU between domains | [`Move-GpoAcrossDomains.ps1`](gpo-migration.md) |
 | Find duplicate AD mail/proxy addresses | `Find-ADDuplicateEmailProxyAddresses.ps1` |
 | Check mail DNS records on Windows | `Get-MailDnsRecords.ps1` |
 | Check mail DNS records on macOS/Linux | `get-mail-dns-records.sh` |
@@ -126,7 +126,7 @@ Run each stage in Windows PowerShell 5.1 under an account authorized in that hos
 .\Move-GpoAcrossDomains.ps1 -Mode Import -Domain 'new.example.com' -Server 'dc01.new.example.com' -Path 'D:\GPOTransfer\Import1' -PackagePath 'D:\GPOTransfer\Workstation.zip' -TargetName 'Migrated - Workstation Policy' -WhatIf
 ```
 
-Remove `-WhatIf` after reviewing the preview. The extraction folder must be new. Review the imported GPO before linking it. See the [full GPO migration guide](gpo-migration.md) for account selection, migration tables, folder transfer and recovery.
+Remove `-WhatIf` after reviewing the preview. The extraction folder must be new. Review the imported GPO before linking it. For a batch, use `-SourceOU` with the OU distinguished name instead of `-GpoName`. Add `-IncludeInherited` to include applicable parent OU and domain links. On import, use `-TargetNamePrefix` to stage the batch under new names. See the [OU migration example](gpo-migration.md#migrate-gpos-linked-to-an-ou).
 
 ### AD Duplicate Proxy Check
 

@@ -38,7 +38,7 @@ This directory contains user-facing documentation for the scripts in this reposi
 | `Export-AdForestInventory.ps1` | Forest/domain topology, functional levels, schema version, DC inventory with FSMO roles. |
 | `Export-AdSiteTopologyInventory.ps1` | AD Sites & Services: sites, subnets, site links, replication connections. |
 | `Export-AdTrustInventory.ps1` | Domain/forest trusts with direction, type, SID filtering, and selective auth. |
-| `Move-GpoAcrossDomains.ps1` | Cross-domain GPO settings migration with independent export/import hosts and optional ZIP transfer. Import writes to the destination domain. |
+| `Move-GpoAcrossDomains.ps1` | Cross-domain migration of one GPO or all GPOs linked to an OU, with separate hosts and optional ZIP transfer. Import writes to the destination domain. |
 | `Export-AdOuGpoInventory.ps1` | OU tree and GPO inventory with Intune-migration candidate flags. |
 | `Export-AdObjectPopulationInventory.ps1` | User/group/computer volumetrics with server-vs-workstation split. |
 | `Export-AdPrivilegedIdentityInventory.ps1` | Privileged, service, and non-human identity inventory with Kerberos delegation. |

@@ -123,7 +123,7 @@ For `Invoke-AdDivestitureDiscovery.ps1` and its modules:
 
 For `Move-GpoAcrossDomains.ps1`, start with a new unlinked destination GPO. Use `-WhatIf` for read-only preflight, then review source/destination reports, domain-specific references, security filtering, delegation, WMI requirements and user/computer configuration status before linking a test OU. Verify resultant policy on test clients.
 
-An existing linked target can affect clients when overwritten. `-AllowOverwrite` makes a pre-import backup, but import is not transactional and does not automatically roll back. Retain `BeforeImport` and `Rollback.json`; the [GPO migration guide](gpo-migration.md#existing-gpos-failures-and-recovery) describes deliberate recovery. Report generation failure does not mean settings were not imported.
+For OU exports, review `SourceLinks.csv` and plan destination links and precedence before deployment. An existing linked target can affect clients when overwritten. `-AllowOverwrite` makes a pre-import backup, but import is not transactional and does not automatically roll back. Retain `BeforeImport` and `Rollback.json`; the [GPO migration guide](gpo-migration.md#existing-gpos-failures-and-recovery) describes deliberate recovery. Report generation failure does not mean settings were not imported.
 
 Transfer ZIPs are not encrypted. Restrict access, use approved transfer methods and keep generated backups, manifests and packages out of source control. A migration table maps supported principals/UNC paths; it does not rewrite arbitrary scripts or all embedded domain references.
 
