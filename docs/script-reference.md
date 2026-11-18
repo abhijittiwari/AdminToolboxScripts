@@ -886,3 +886,19 @@ Prints grouped console sections for MX, SPF, DMARC, DKIM, and warnings. The Bash
 - Multiple DMARC records at `_dmarc.<domain>` should be reviewed.
 - DKIM selectors are not reliably discoverable from DNS alone; pass known selectors when available.
 - `TXT found; verify manually` means TXT records exist but do not clearly match a DKIM public key pattern.
+
+## Move-GpoAcrossDomains.ps1
+
+Backs up one GPO and imports its settings into a destination domain using separate authenticated host sessions. The source GPO is retained. Supports a copied folder or a portable ZIP; import never connects to the source host.
+
+- Runtime: Windows PowerShell 5.1 and the GroupPolicy module on each host.
+- Required in both modes: `-Mode Export|Import`, `-Domain`, `-Server`, `-Path`.
+- Export selection: exactly one of `-GpoName` or `-GpoId`.
+- Optional ZIP: `-PackagePath` creates a new archive on export or reads an existing copied archive on import.
+- Import options: `-TargetName`, `-MigrationTable`, `-AllowOverwrite`.
+- Common options: `-WhatIf`, `-Confirm`.
+- New targets are unlinked; existing targets are refused unless overwrite is explicitly enabled. Existing target settings are backed up before overwrite.
+- Output includes native backup data, Manifest.json, source/destination HTML/XML reports, and recovery metadata when overwriting.
+- Links, source filtering/delegation, WMI filters, Central Store files and external dependencies require separate review/configuration.
+
+See the [complete parameter table and two-host workflow](gpo-migration.md), including permissions, path semantics, validation, failure handling and recovery. This script writes to the destination domain in Import mode and has not been live-tested against AD in the authoring environment.

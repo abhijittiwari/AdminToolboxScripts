@@ -5,6 +5,7 @@ This directory contains user-facing documentation for the scripts in this reposi
 ## Start Here
 
 - [Quick Start](quick-start.md): install prerequisites, clone the repository, and run the scripts safely.
+- [GPO migration](gpo-migration.md): export on one host and import on another, with transfer, validation and recovery instructions.
 - [Script Reference](script-reference.md): parameters, examples, outputs, and validation notes for each script.
 - [Operations and Security](operations-and-security.md): permissions, data handling, validation, and troubleshooting guidance.
 
@@ -37,6 +38,7 @@ This directory contains user-facing documentation for the scripts in this reposi
 | `Export-AdForestInventory.ps1` | Forest/domain topology, functional levels, schema version, DC inventory with FSMO roles. |
 | `Export-AdSiteTopologyInventory.ps1` | AD Sites & Services: sites, subnets, site links, replication connections. |
 | `Export-AdTrustInventory.ps1` | Domain/forest trusts with direction, type, SID filtering, and selective auth. |
+| `Move-GpoAcrossDomains.ps1` | Cross-domain GPO settings migration with independent export/import hosts and optional ZIP transfer. Import writes to the destination domain. |
 | `Export-AdOuGpoInventory.ps1` | OU tree and GPO inventory with Intune-migration candidate flags. |
 | `Export-AdObjectPopulationInventory.ps1` | User/group/computer volumetrics with server-vs-workstation split. |
 | `Export-AdPrivilegedIdentityInventory.ps1` | Privileged, service, and non-human identity inventory with Kerberos delegation. |
@@ -55,4 +57,4 @@ This directory contains user-facing documentation for the scripts in this reposi
 
 ## Safety Model
 
-The scripts are intended for reporting and troubleshooting. They do not remediate objects, change DNS, modify Exchange Online, modify Entra ID, or modify Active Directory. Output files may still contain sensitive administrative data and should be handled accordingly.
+Reporting and discovery scripts read configuration and produce reports. Do not assume every script is read-only: `Move-GpoAcrossDomains.ps1 -Mode Import` creates a destination GPO or, with `-AllowOverwrite`, replaces an existing target's settings after a backup. Review each script's write behavior and deployment scope before use. Reports and GPO transfer packages contain sensitive administrative data.

@@ -19,6 +19,7 @@ cd AdminToolboxScripts
 | Assess AD / Entra ID / DNS / AD CS security hardening (Appendix B controls) | `Invoke-AdSecurityHardeningAssessment.ps1` (or the individual `Export-*HardeningAssessment.ps1` / `Export-*Assessment.ps1` modules) |
 | Gather divestiture discovery evidence (forest, trusts, GPOs, hybrid identity, on-prem Exchange, M365 volumetrics) | `Invoke-AdDivestitureDiscovery.ps1` (or the individual `Export-*Inventory.ps1` modules) |
 | Confirm the tenant's authentication model (Managed vs Federated/ADFS) | `Export-EntraAuthenticationModel.ps1` |
+| Migrate one GPO between domains, including from separate hosts | [`Move-GpoAcrossDomains.ps1`](gpo-migration.md) |
 | Find duplicate AD mail/proxy addresses | `Find-ADDuplicateEmailProxyAddresses.ps1` |
 | Check mail DNS records on Windows | `Get-MailDnsRecords.ps1` |
 | Check mail DNS records on macOS/Linux | `get-mail-dns-records.sh` |
@@ -38,6 +39,7 @@ Install only the modules needed for the script you plan to run.
 | `Export-ExchangeMigrationReadiness.ps1` | `ExchangeOnlineManagement`; `Microsoft.Graph.Authentication` only when using `-IncludeLicensing`. |
 | `Export-DomainCutoverAssessment.ps1` | `ExchangeOnlineManagement` unless `-SkipExchange`/`-AcceptedDomainsCsv`; `Resolve-DnsName` or `dig` for DNS. |
 | `Get-EntraAdminAccounts.ps1` | Microsoft Graph modules; `ExchangeOnlineManagement` only when using `-IncludeMailbox`. |
+| `Move-GpoAcrossDomains.ps1` | Windows PowerShell 5.1; GPMC/RSAT Group Policy tools on each host; source read/backup rights and destination GPO create/edit rights. |
 | `Find-ADDuplicateEmailProxyAddresses.ps1` | RSAT Active Directory PowerShell module on Windows. |
 | `Invoke-AdSecurityHardeningAssessment.ps1` and the hardening modules | PowerShell 7; RSAT (`ActiveDirectory`, `DnsServer`); WinRM to Domain Controllers and sampled computers; Microsoft Graph SDK for the Entra ID module (`-IncludeEntraId`). |
 | `Invoke-AdDivestitureDiscovery.ps1` and the discovery modules | PowerShell 7; RSAT (`ActiveDirectory`, `GroupPolicy`, `DnsServer`, `DhcpServer`); `ADSync` on the sync server for `Export-EntraConnectConfiguration.ps1`; Exchange Management Shell for `Export-ExchangeOnPremInventory.ps1`; Graph / `ExchangeOnlineManagement` / `MicrosoftTeams` / SPO / Security & Compliance sessions for the cloud modules (`-IncludeCloud`). |
@@ -111,6 +113,20 @@ Connect-MgGraph -Scopes Policy.Read.All,Directory.Read.All,RoleManagement.Read.D
 Connect-MgGraph -Scopes Domain.Read.All,Organization.Read.All,User.Read.All
 ./Invoke-AdDivestitureDiscovery.ps1 -IncludeCloud -OutputFolder ./DiscoveryRun
 ```
+
+### Cross-domain GPO Transfer on Separate Hosts
+
+Run each stage in Windows PowerShell 5.1 under an account authorized in that host's domain. The import stage creates or modifies a destination GPO.
+
+```powershell
+# Source host: both output paths must be new.
+.\Move-GpoAcrossDomains.ps1 -Mode Export -Domain 'old.example.com' -Server 'dc01.old.example.com' -GpoName 'Workstation Policy' -Path 'C:\GPOTransfer\Export1' -PackagePath 'C:\GPOTransfer\Workstation.zip'
+
+# Copy the ZIP and script to the destination host; then run there:
+.\Move-GpoAcrossDomains.ps1 -Mode Import -Domain 'new.example.com' -Server 'dc01.new.example.com' -Path 'D:\GPOTransfer\Import1' -PackagePath 'D:\GPOTransfer\Workstation.zip' -TargetName 'Migrated - Workstation Policy' -WhatIf
+```
+
+Remove `-WhatIf` after reviewing the preview. The extraction folder must be new. Review the imported GPO before linking it. See the [full GPO migration guide](gpo-migration.md) for account selection, migration tables, folder transfer and recovery.
 
 ### AD Duplicate Proxy Check
 

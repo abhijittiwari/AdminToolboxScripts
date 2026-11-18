@@ -7,6 +7,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 - [Quick Start](docs/quick-start.md)
 - [Script Reference](docs/script-reference.md)
 - [Operations and Security](docs/operations-and-security.md)
+- [Cross-domain GPO migration](docs/gpo-migration.md)
 
 ## Scripts
 
@@ -40,6 +41,7 @@ Collection of administrative scripts for Microsoft 365, Entra ID, Active Directo
 | `Export-AdForestInventory.ps1` | PowerShell | Inventories forest/domain topology: functional levels, schema version, UPN suffixes, and the DC inventory with FSMO roles. |
 | `Export-AdSiteTopologyInventory.ps1` | PowerShell | Inventories AD Sites & Services: sites, subnets, site links, and replication connections (subnet-to-site mapping). |
 | `Export-AdTrustInventory.ps1` | PowerShell | Inventories domain/forest trusts with direction, type, and SID-filtering/selective-auth posture for SIDHistory coexistence design. |
+| `Move-GpoAcrossDomains.ps1` | Windows PowerShell 5.1 | Exports one GPO and imports its settings across domains using independent hosts and an optional portable ZIP; destination import creates or modifies a GPO. |
 | `Export-AdOuGpoInventory.ps1` | PowerShell | Inventories the OU tree and GPOs (links, filtering, configured settings) and flags Intune-migration candidates. |
 | `Export-AdObjectPopulationInventory.ps1` | PowerShell | Reports user/group/computer volumetrics: active vs disabled, stale, group scope/type, and server-vs-workstation split. |
 | `Export-AdPrivilegedIdentityInventory.ps1` | PowerShell | Inventories privileged group members, adminCount objects, and service/non-human accounts with Kerberos-delegation type. |
@@ -986,7 +988,15 @@ Console output is grouped into sections:
 - DKIM status can be `Found`, `Not found`, or `TXT found; verify manually`.
 - The script exits with an error if `dig` is not available or the domain cannot be parsed.
 
+## Move-GpoAcrossDomains.ps1
+
+Exports a GPO under the source-domain account, then imports the copied backup under the destination-domain account. The two stages can run independently on different hosts; the destination host does not need connectivity to the source. Supports folder or ZIP transfer, an optional migration table, WhatIf, and pre-overwrite backups. A new target is unlinked; overwriting an existing linked target can affect clients.
+
+See the [GPO migration guide](docs/gpo-migration.md) for prerequisites, credentials, two-host commands, parameter meanings, limitations, troubleshooting and recovery. The source GPO is retained.
+
 ## General Safety Notes
+
+- `Move-GpoAcrossDomains.ps1 -Mode Import` creates or changes destination GPO settings. Review settings and deployment scope before linking or overwriting; export packages contain sensitive policy data.
 
 - `Get-EntraAdminAccounts.ps1` and `Get-EntraAdminMailboxInventory.ps1` read Microsoft Graph and Exchange Online data, then export CSV reports.
 - `Find-ADDuplicateEmailProxyAddresses.ps1` is read-only against Active Directory and exports CSV reports.

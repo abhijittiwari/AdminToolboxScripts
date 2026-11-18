@@ -1,14 +1,14 @@
 # Operations and Security
 
-## Read-Only Intent
+## Read and Write Behavior
 
-The scripts in this repository are designed for reporting and troubleshooting. They do not intentionally modify Microsoft 365, Entra ID, Exchange Online, Active Directory, or DNS records.
+Reporting and discovery scripts read configuration and export results. Review the selected script rather than assuming repository-wide read-only behavior. `Move-GpoAcrossDomains.ps1 -Mode Export` reads the source GPO and writes local backup files; `-Mode Import` creates or changes a destination GPO. With `-AllowOverwrite`, existing links can remain active and clients can receive the replacement settings.
 
 Before running scripts in production, review the source and validate the commands against your organization's change-management requirements.
 
 ## Permissions
 
-Use the least-privileged administrative account that can read the required data.
+Use the least-privileged administrative account that can perform the selected operation. Reporting requires read access; GPO import additionally requires destination create/edit rights.
 
 | Area | Typical Access Needed |
 | --- | --- |
@@ -18,6 +18,7 @@ Use the least-privileged administrative account that can read the required data.
 | Active Directory duplicate scans | Read access to the selected AD search base and schema. |
 | Security hardening assessments | AD read access (domain, configuration partition, group membership); WinRM to Domain Controllers and sampled computers for registry/service/audit-policy reads; Graph read scopes (`Policy.Read.All`, `Directory.Read.All`, `RoleManagement.Read.Directory`, `AccessReview.Read.All`, `User.Read.All`) for the Entra ID module. |
 | Divestiture discovery inventories | AD/GPO/DNS/DHCP read access via RSAT; WinRM to DCs for time-source reads; local read on the Entra Connect and Exchange servers for those modules; Graph (`Domain.Read.All`, `Organization.Read.All`, `User.Read.All`), Exchange Online, Teams, SPO, and Security & Compliance read access for the cloud modules. |
+| GPO export/import | Source GPO read/backup access; destination GPO enumeration and create rights, or read/backup/edit rights for overwrite; local output-folder access. Each stage uses its current Windows account. |
 | DNS record checks | Network access to the selected resolver. |
 
 Some Microsoft Graph permissions may require admin consent depending on tenant policy.
@@ -45,6 +46,7 @@ Treat generated files as sensitive administrative data. Outputs may contain:
 - Proxy addresses.
 - Sign-in metadata.
 - DNS security posture information.
+- GPO policy settings, security principals, network paths and embedded policy scripts in backups/ZIPs.
 - Security control pass/fail status and configuration weaknesses (hardening assessments).
 - Forest topology, trust configuration, privileged identities, SIDHistory, and license assignments (discovery inventories).
 
@@ -116,6 +118,14 @@ For `Invoke-AdDivestitureDiscovery.ps1` and its modules:
 - Review `DiscoveryIndex.csv` first; any `Error` row means that module's data is missing, not empty.
 - Spot-check volumetric counts (users, computers, mailbox sizes) against the source admin centres before using them for sizing or licensing decisions.
 - Run `Export-EntraConnectConfiguration.ps1` on the sync server and `Export-ExchangeOnPremInventory.ps1` from an Exchange Management Shell; they report cleanly when run elsewhere but collect nothing.
+
+## GPO Migration Validation and Recovery
+
+For `Move-GpoAcrossDomains.ps1`, start with a new unlinked destination GPO. Use `-WhatIf` for read-only preflight, then review source/destination reports, domain-specific references, security filtering, delegation, WMI requirements and user/computer configuration status before linking a test OU. Verify resultant policy on test clients.
+
+An existing linked target can affect clients when overwritten. `-AllowOverwrite` makes a pre-import backup, but import is not transactional and does not automatically roll back. Retain `BeforeImport` and `Rollback.json`; the [GPO migration guide](gpo-migration.md#existing-gpos-failures-and-recovery) describes deliberate recovery. Report generation failure does not mean settings were not imported.
+
+Transfer ZIPs are not encrypted. Restrict access, use approved transfer methods and keep generated backups, manifests and packages out of source control. A migration table maps supported principals/UNC paths; it does not rewrite arbitrary scripts or all embedded domain references.
 
 ## DNS Validation
 
